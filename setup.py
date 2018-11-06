@@ -12,13 +12,10 @@ REQUIRES_PYTHON = '>=3.7.0'
 VERSION = None
 
 REQUIRED = [
-    'gmpy2',
-    'zfec',
-    'pycrypto',
-    'cffi',
+    'gmpy',
 ]
 
-TESTS_REQUIRES = [
+TEST_REQUIRES = [
     'flake8',
     'pytest',
     'pytest-asyncio',
@@ -40,14 +37,11 @@ DOCS_REQUIRE = [
 
 ETH_REQUIRES = ['web3', 'ethereum']
 
-AWS_REQUIRES = ['boto3', 'paramiko']
-
 EXTRAS = {
-    'tests': TESTS_REQUIRES,
-    'dev': DEV_REQUIRES + TESTS_REQUIRES + DOCS_REQUIRE,
+    'test': TEST_REQUIRES,
+    'dev': DEV_REQUIRES + TEST_REQUIRES + DOCS_REQUIRE,
     'docs': DOCS_REQUIRE,
     'eth': ETH_REQUIRES,
-    'aws': AWS_REQUIRES,
 }
 
 here = os.path.abspath(os.path.dirname(__file__))
@@ -72,9 +66,7 @@ setup(
     long_description=long_description,
     long_description_content_type='text/markdown',
     python_requires=REQUIRES_PYTHON,
-    setup_requires=['cffi>=1.0.0'],
     install_requires=REQUIRED,
-    cffi_modules=['apps/shuffle/solver/solver_build.py:ffibuilder'],
     extras_require=EXTRAS,
     classifiers=[
         'Development Status :: 1 - Planning',
