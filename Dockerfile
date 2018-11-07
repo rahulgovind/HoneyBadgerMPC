@@ -2,7 +2,7 @@ FROM quay.io/pypa/manylinux1_x86_64 as wheel_builder
 
 ENV PYTHONUNBUFFERED=1
 
-RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain nightly
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain nightly-2018-10-24
 ENV PATH /root/.cargo/bin:$PATH
 ENV PYBIN /opt/python/cp37-cp37m/bin
 ENV PYTHON_SYS_EXECUTABLE "$PYBIN/python"
