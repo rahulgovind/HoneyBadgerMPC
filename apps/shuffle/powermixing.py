@@ -20,11 +20,18 @@ async def wait_for_preprocessing():
         await asyncio.sleep(1)
 
 
-def generate_test_powers(prefix, a, b, k, N, t):
-    # Generate k powers, store in files of form "prefix-%d.share"
-    polys = [Poly.random(t, a)]
-    for j in range(1, k+1):
-        polys.append(Poly.random(t, pow(b, j)))
+def generate_test_powers(prefix, max_power, N, t, howmany=None):
+    # Generate a random a,
+    # and the first up to `max_power`s of b,
+    # store in files of form "${prefix}-%d.share"
+    if howmany is None:
+        howmany = k
+    polys = []
+    for i in range(howmany):
+        polys.append(Poly.random(t))
+        for j in range(1, max_power+1):
+            b = Field(random.randint(0, Field.modulus-1))
+            polys.append(Poly.random(t, pow(b, j)))
     write_polys(prefix, Field.modulus, N, t, polys)
 
 
@@ -51,11 +58,12 @@ async def allSecretsPhase1(context, **kwargs):
     aS, aMinusBShares, allPowers = [], [], []
 
     stime = time()
+    all_shares = context.read_shares(open(filename))
     for i in range(k):
+        shares = all_shares[i * (k + 1):(i + 1) * (k + 1)]
         batchid = f"{runid}_{i}"
         powers_prefix = f"{powersPrefix}_{batchid}"
         filename = f"{powers_prefix}-{context.myid}.share"
-        shares = context.read_shares(open(filename))
         aMinusBShares.append(shares[0] - shares[1])
         aS.append(shares[0])
         allPowers.append(shares[1:])

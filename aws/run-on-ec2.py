@@ -149,12 +149,7 @@ def getPowermixingSetupCommands(max_k, runid, s3Manager, instanceIds):
         url = s3Manager.uploadFile(fname)
         q.put(url)
 
-    a_s = [Field(random.randint(0, Field.modulus-1)) for _ in range(k)]
-    b_s = [Field(random.randint(0, Field.modulus-1)) for _ in range(k)]
-
-    for i, a in enumerate(a_s):
-        batchid = f"{runid}_{i}"
-        generate_test_powers(f"{powersPrefix}_{batchid}", a, b_s[i], k, N, t)
+    generate_test_powers(f"{powersPrefix}_{runid}", k, N, t)
 
     setupCommands = []
     for i, instanceId in enumerate(instanceIds):
