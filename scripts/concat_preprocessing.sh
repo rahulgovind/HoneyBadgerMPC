@@ -7,14 +7,16 @@
 # The inputs are read from sharedata/
 # The outputs are put in concatsharedata/
 
-N=16
+N=50
 t=$(expr \( $N - 1 \) / 3)
-k=4096
+#k=4096
+k=1024
 set -e
 set -x
-for kind in "inputs" "triples" "bits"
+# for kind in "inputs" "triples" "bits"
+for kind in "abpowers"
 do
-    BASE="sharedata/butterfly-N${N}-k${k}-${kind}"
+    BASE="sharedata/powermix-N${N}-k${k}-${kind}"
     for party in $(seq 0 $(expr $N - 1))
     do
 	DST="concat$BASE-${party}.share"
