@@ -187,6 +187,8 @@ class GFElement(FieldElement):
 
     def __pow__(self, exponent):
         """Exponentiation."""
+        if exponent < 0:
+            return 1 / self.__pow__(-exponent)
         return GFElement(pow(self.value, exponent, self.modulus), self.field)
 
     def __neg__(self):
