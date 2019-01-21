@@ -41,10 +41,10 @@
 from honeybadgermpc.linearsolver import someSolution
 
 from honeybadgermpc.field import GF
-from honeybadgermpc.polynomial import polynomialsOver
+from honeybadgermpc.polynomial import polynomialsOver, EvalPoint, fnt_decode_step2
 
 
-def makeEncoderDecoder(n, k, p, omega=None):
+def makeEncoderDecoder(n, k, p, point=None):
     """
     n: number of symbols to encode
     k: number of symbols in the message
@@ -61,10 +61,8 @@ def makeEncoderDecoder(n, k, p, omega=None):
     # at either f(i) for convenience, or
     #    f( omega^i ) where omega. If omega is an n'th root of unity,
     # then we can do efficient FFT-based polynomial interpolations.
-    if omega is None:
-        def point(i): return Fp(1+i)
-    else:
-        def point(i): return Fp(omega)**i
+    if point is None or type(point) is not EvalPoint:
+        point = EvalPoint(Fp, n, use_fft=False)
 
     # message is a list of integers at most p
     def encode(message):
@@ -126,7 +124,7 @@ def makeEncoderDecoder(n, k, p, omega=None):
                 return Q, E
         raise ValueError("found no divisors!")
 
-    def decode(encodedMessage, debug=False):
+    def decode(encodedMessage, debug=False, precomputed_data=None):
         assert(len(encodedMessage) == n)
         c = sum(m is None for m in encodedMessage)  # number of erasures
         assert(2*t + 1 + c <= n)
@@ -139,14 +137,26 @@ def makeEncoderDecoder(n, k, p, omega=None):
 
         encM = [(point(i), m)
                 for i, m in enumerate(encodedMessage) if m is not None]
-
         if e == 0:
             # decode with no errors
-            P = Poly.interpolate(encM)
+            if point.use_fft:
+                zs, As, Ais = precomputed_data
+                ys = [m for m in encodedMessage if m is not None]
+                ys = ys[:t + 1]
+                P = fnt_decode_step2(Poly, zs, ys, As, Ais,
+                                     point.omega2, point.order)
+            else:
+                P = Poly.interpolate(encM)
+
             return P.coeffs
 
         Q, E = solveSystem(encM, maxE=e, debug=debug)
         P, remainder = Q.__divmod__(E)
+
+        print('n:', n, 'k:', k, 't:', t, 'c:', c)
+        print('decoding with e:', e)
+        print('decoding with c:', c)
+
         if not remainder.isZero():
             raise Exception("Q is not divisibly by E!")
         return P.coeffs

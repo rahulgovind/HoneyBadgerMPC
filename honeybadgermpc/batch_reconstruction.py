@@ -1,6 +1,6 @@
 import asyncio
 from .field import GF
-from .polynomial import polynomialsOver
+from .polynomial import polynomialsOver, EvalPoint, fnt_decode_step1
 from .robust_reconstruction import attempt_reconstruct, robust_reconstruct
 from .logger import BenchmarkLogger
 from collections import defaultdict
@@ -81,15 +81,30 @@ def attempt_reconstruct_batch(data, field, n, t, point):
     n_chunks = Bs[0]
     assert all(b == n_chunks for b in Bs)
     recons = []
+
+    if point.use_fft:
+        # Precompute data that can be reused for multiple chunks in a batch
+
+        Poly = polynomialsOver(field)
+        zs = [i for i in range(len(data)) if data[i] is not None]
+
+        assert len(zs) >= t + 1
+        zs = zs[:(t + 1)]
+        As, Ais = fnt_decode_step1(Poly, zs, point.omega2, point.order)
+        precomputed_data = (zs, As, Ais)
+    else:
+        precomputed_data = None
+
     for i in range(n_chunks):
         chunk = [d[i] if d is not None else None for d in data]
         try:
-            P, failures = attempt_reconstruct(chunk, field, n, t, point)
+            P, failures = attempt_reconstruct(chunk, field, n, t, point,
+                                              precomputed_data)
             recon = P.coeffs
             recon += [field(0)] * (t + 1 - len(recon))
             recons += recon
         except ValueError as e:
-            if str(e) in ("Wrong degree", "no divisors found"):
+            if str(e) in ("Wrong degree", "no divisors found", "Did not coincide"):
                 # TODO: return partial success, keep tracking of failures
                 return None
             raise
@@ -111,7 +126,8 @@ def withAtMostNonNone(data, k):
             yield x
 
 
-async def batch_reconstruct(elem_batches, p, t, n, myid, send, recv, debug=False):
+async def batch_reconstruct(elem_batches, p, t, n, myid, send, recv, debug=False,
+                            use_fft=False):
     """
     args:
       shared_secrets: an array of points representing shared secrets S1 - SB
@@ -133,7 +149,7 @@ async def batch_reconstruct(elem_batches, p, t, n, myid, send, recv, debug=False
     Poly = polynomialsOver(Fp)
     benchLogger = BenchmarkLogger.get(myid)
 
-    def point(i): return Fp(i+1)  # TODO: make it use omega
+    point = EvalPoint(Fp, n, use_fft=use_fft)
 
     _taskSub, subscribe = subscribeRecv(recv)
     del recv  # ILC enforces this in type system, no duplication of reads
@@ -164,7 +180,7 @@ async def batch_reconstruct(elem_batches, p, t, n, myid, send, recv, debug=False
     for nAvailable in range(2 * t + 1, n + 1):
         data = await waitFor(dataR1, nAvailable)
         data = tuple(withAtMostNonNone(data, nAvailable))
-        # print('data R1:', data, 'nAvailable:', nAvailable)
+        # print('data R1:', 'nAvailable:', nAvailable)
         data = tuple([None if d is None else tuple(map(Fp, d)) for d in data])
         stime = time()
         reconsR2 = attempt_reconstruct_batch(data, field, n, t, point)
@@ -179,7 +195,7 @@ async def batch_reconstruct(elem_batches, p, t, n, myid, send, recv, debug=False
     reconsR2 = reconsR2[:len(elem_batches)]
 
     # Step 3: Send R2 points
-    sendBatch(reconsR2, wrapSend('R2', send), lambda _: Fp(0))
+    sendBatch(reconsR2, wrapSend('R2', send), lambda _: point.zero())
 
     # Step 4: Attempt to reconstruct R2
     for nAvailable in range(nAvailable, n + 1):
@@ -233,7 +249,7 @@ async def batch_reconstruct_one(shared_secrets, p, t, n, myid, send, recv, debug
     Fp = GF.get(p)
     Poly = polynomialsOver(Fp)
 
-    def point(i): return Fp(i+1)  # TODO: make it use omega
+    point = EvalPoint(Fp, n, use_fft=False)
 
     # Reconstruct a batch of exactly t+1 secrets
     assert len(shared_secrets) == t+1
@@ -275,7 +291,7 @@ async def batch_reconstruct_one(shared_secrets, p, t, n, myid, send, recv, debug
         # Round 2:
         # Evaluate and send f(i,0) to each other party
         for j in range(n):
-            send(j, ('R2', P1(Fp(0))))
+            send(j, ('R2', P1(point.zero())))
 
         # Robustly reconstruct f(X,0)
         P2, failures_detected = await robust_reconstruct(round2_shares, Fp, n, t, point)

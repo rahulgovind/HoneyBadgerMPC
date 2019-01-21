@@ -12,7 +12,7 @@ async def waitFor(aws, to_wait):
     return done, pending
 
 
-def attempt_reconstruct(encoded, field, n, t, point):
+def attempt_reconstruct(encoded, field, n, t, point, precomputed_data=None):
     # Attempt to reconstruct with a mixture of erasures or errors
     assert len(encoded) == n
     assert sum(f is not None for f in encoded) >= 2*t + 1
@@ -21,9 +21,9 @@ def attempt_reconstruct(encoded, field, n, t, point):
     # raise ValueError("Sentinel bug")
 
     # interpolate with error correction to get f(j,y)
-    _, decode, _ = makeEncoderDecoder(n, t+1, field.modulus)
+    _, decode, _ = makeEncoderDecoder(n, t+1, field.modulus, point)
 
-    P = polynomialsOver(field)(decode(encoded))
+    P = polynomialsOver(field)(decode(encoded, precomputed_data=precomputed_data))
     if P.degree() > t:
         raise ValueError("Wrong degree")
 

@@ -357,6 +357,42 @@ def fnt_decode_step2(Poly, zs, ys, As, Ais, omega2, n):
     return Prec
 
 
+class EvalPoint(object):
+    """Helper to generate evaluation points for polynomials between n parties
+
+    If FFT is being used:
+    omega is a root of unity s.t. order(omega) = (smallest power of 2 >= n)
+    i'th point (zero-indexed) = omega^(i + 1)
+
+    Without FFT:
+    i'th point (zero-indexed) = i + 1
+    """
+    def __init__(self, field, n, use_fft=False):
+        self.use_fft = use_fft
+        self.field = field
+
+        # Need an additional point where we evaluate polynomial to get secret
+        order = n
+        if use_fft:
+            self.order = order if (order & (order - 1) == 0) else 2 ** order.bit_length()
+
+            self.omega2 = get_omega(field, 2 * self.order, seed=0)
+            self.omega = self.omega2 ** 2
+        else:
+            self.order = order
+            self.omega2 = None
+            self.omega = None
+
+    def __call__(self, i):
+        if self.use_fft:
+            return self.field(self.omega2.value ** (2 * i))
+        else:
+            return self.field(i + 1)
+
+    def zero(self):
+        return self.field(0)
+
+
 if __name__ == "__main__":
     field = GF.get(
         0x73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001)
