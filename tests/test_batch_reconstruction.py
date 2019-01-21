@@ -1,6 +1,7 @@
 from pytest import mark
 import pytest
 import asyncio
+from honeybadgermpc.polynomial import EvalPoint
 from honeybadgermpc.batch_reconstruction import batch_reconstruct
 from honeybadgermpc.router import simple_router
 from honeybadgermpc.field import GF, GFElement
@@ -25,7 +26,7 @@ async def test():
     # After AVSS, poly1 = x + 2, poly2 = 3x + 4, secret1 = 2, secret2 = 4
     # Hard code the shared secret value as input into batch_reconstruction function
     # The final constructed polynomial should be p = 4x + 2
-    shared_secrets = [(3,  7),
+    shared_secrets = [(3, 7),
                       (4, 10),
                       (5, 13),
                       (6, 16)]
@@ -72,6 +73,42 @@ async def test():
 
 
 @mark.asyncio
+async def test_fft():
+    N = 4
+    p = 73
+    t = 1
+    Fp = GF.get(p)
+
+    # loop = asyncio.get_event_loop()
+    # loop.set_exception_handler(handle_async_exception)
+
+    # Test with simple case: n = 4, t =1
+    # After AVSS, poly1 = x + 2, poly2 = 3x + 4, secret1 = 2, secret2 = 4
+    # Hard code the shared secret value as input into batch_reconstruction function
+    # The final constructed polynomial should be p = 4x + 2
+    point = EvalPoint(Fp, N, use_fft=True)
+    omega = point.omega2 ** 2
+    shared_secrets = [(omega + 2, 3 * omega + 4),
+                      (omega ** 2 + 2, 3 * omega ** 2 + 4),
+                      (omega ** 3 + 2, 3 * omega ** 3 + 4),
+                      (omega ** 4 + 2, 3 * omega ** 4 + 4)]
+    shared_secrets = [(a.value, b.value) for (a, b) in shared_secrets]
+    # shared_secrets = [()]
+    # Test 1: Correct decoding with all four points
+    sends, recvs = simple_router(N)
+    towait = []
+    for i in range(N):
+        ss = tuple(map(Fp, shared_secrets[i]))
+        towait.append(batch_reconstruct(ss, p, t, N, i,
+                                        sends[i], recvs[i], True, use_fft=True))
+    results = await asyncio.gather(*towait)
+    for r in results:
+        assert r == [3, 7]
+
+    # TODO: Add tests for error checks and node failures
+
+
+@mark.asyncio
 async def test_opening_types():
     # batch_reconstruct should always return GFElements, but doesn't
     N = 4
@@ -86,7 +123,7 @@ async def test_opening_types():
 
     sends, recvs = simple_router(N)
     towait = []
-    for i in range(N-1):  # one erasure
+    for i in range(N - 1):  # one erasure
         ss = tuple(map(Fp, shared_secrets[i]))
         towait.append(batch_reconstruct(ss, p, t, N, i,
                                         sends[i], recvs[i], True))
@@ -95,6 +132,7 @@ async def test_opening_types():
         print(r)
         for elem in r:
             assert type(elem) is GFElement
+
 
 if __name__ == '__main__':
     try:

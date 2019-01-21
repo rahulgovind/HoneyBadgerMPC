@@ -41,10 +41,10 @@
 from honeybadgermpc.linearsolver import someSolution
 
 from honeybadgermpc.field import GF
-from honeybadgermpc.polynomial import polynomialsOver
+from honeybadgermpc.polynomial import polynomialsOver, fnt_decode_step2
 
 
-def makeEncoderDecoder(n, k, p, omega=None):
+def makeEncoderDecoder(n, k, p, point, precomputed_data=None):
     """
     n: number of symbols to encode
     k: number of symbols in the message
@@ -61,10 +61,6 @@ def makeEncoderDecoder(n, k, p, omega=None):
     # at either f(i) for convenience, or
     #    f( omega^i ) where omega. If omega is an n'th root of unity,
     # then we can do efficient FFT-based polynomial interpolations.
-    if omega is None:
-        def point(i): return Fp(1+i)
-    else:
-        def point(i): return Fp(omega)**i
 
     # message is a list of integers at most p
     def encode(message):
@@ -90,13 +86,13 @@ def makeEncoderDecoder(n, k, p, omega=None):
 
             def row(i, a, b):
                 return (
-                    [b * a**j for j in range(ENumVars)] +
-                    [-1 * a**j for j in range(QNumVars)] + [0]
+                        [b * a ** j for j in range(ENumVars)] +
+                        [-1 * a ** j for j in range(QNumVars)] + [0]
                 )  # the "extended" part of the linear system
 
             system = (
-                [row(i, a, b) for (i, (a, b)) in enumerate(encodedMessage)] +
-                [[0] * (ENumVars - 1) + [1] + [0] * (QNumVars) + [1]]
+                    [row(i, a, b) for (i, (a, b)) in enumerate(encodedMessage)] +
+                    [[0] * (ENumVars - 1) + [1] + [0] * (QNumVars) + [1]]
             )  # ensure coefficient of x^e in E(x) is 1
 
             if debug:
@@ -127,9 +123,9 @@ def makeEncoderDecoder(n, k, p, omega=None):
         raise ValueError("found no divisors!")
 
     def decode(encodedMessage, debug=False):
-        assert(len(encodedMessage) == n)
+        assert (len(encodedMessage) == n)
         c = sum(m is None for m in encodedMessage)  # number of erasures
-        assert(2*t + 1 + c <= n)
+        assert (2 * t + 1 + c <= n)
         e = (n - c - (2 * t + 1))  # number of errors to correct
 
         if debug:
@@ -142,7 +138,15 @@ def makeEncoderDecoder(n, k, p, omega=None):
 
         if e == 0:
             # decode with no errors
-            P = Poly.interpolate(encM)
+            if point.use_fft:
+                zs, As, Ais = precomputed_data
+                ys = [m for m in encodedMessage if m is not None]
+                ys = ys[:t + 1]
+                P = fnt_decode_step2(Poly, zs, ys, As, Ais,
+                                     point.omega2, point.n)
+            else:
+                P = Poly.interpolate(encM)
+
             return P.coeffs
 
         Q, E = solveSystem(encM, maxE=e, debug=debug)

@@ -1,6 +1,6 @@
 import asyncio
 from .field import GF
-from .polynomial import polynomialsOver
+from .polynomial import polynomialsOver, EvalPoint, fnt_decode_step1
 from .robust_reconstruction import attempt_reconstruct, robust_reconstruct
 from .logger import BenchmarkLogger
 from collections import defaultdict
@@ -58,6 +58,7 @@ def recvEachParty(recv, n):
 def wrapSend(tag, send):
     def _send(j, o):
         send(j, (tag, o))
+
     return _send
 
 
@@ -75,16 +76,30 @@ def toChunks(data, chunkSize):
 def attempt_reconstruct_batch(data, field, n, t, point):
     assert len(data) == n
     assert sum(f is not None for f in data) >= 2 * t + 1
-    assert 2*t < n, "Robust reconstruct waits for at least n=2t+1 values"
+    assert 2 * t < n, "Robust reconstruct waits for at least n=2t+1 values"
 
     Bs = [len(f) for f in data if f is not None]
     n_chunks = Bs[0]
     assert all(b == n_chunks for b in Bs)
     recons = []
+
+    if point.use_fft:
+        Poly = polynomialsOver(field)
+        zs = [i for i in range(len(data)) if data[i] is not None]
+
+        assert len(zs) >= t + 1
+        zs = zs[:(t + 1)]
+        zs = [z + 1 for z in zs]
+        As, Ais = fnt_decode_step1(Poly, zs, point.omega2, point.n)
+        precomputed_data = (zs, As, Ais)
+    else:
+        precomputed_data = None
+
     for i in range(n_chunks):
         chunk = [d[i] if d is not None else None for d in data]
         try:
-            P, failures = attempt_reconstruct(chunk, field, n, t, point)
+            P, failures = attempt_reconstruct(chunk, field, n, t, point,
+                                              precomputed_data)
             recon = P.coeffs
             recon += [field(0)] * (t + 1 - len(recon))
             recons += recon
@@ -111,7 +126,8 @@ def withAtMostNonNone(data, k):
             yield x
 
 
-async def batch_reconstruct(elem_batches, p, t, n, myid, send, recv, debug=False):
+async def batch_reconstruct(elem_batches, p, t, n, myid, send, recv, debug=False,
+                            use_fft=False):
     """
     args:
       shared_secrets: an array of points representing shared secrets S1 - SB
@@ -131,9 +147,10 @@ async def batch_reconstruct(elem_batches, p, t, n, myid, send, recv, debug=False
     """
     Fp = field = GF.get(p)
     Poly = polynomialsOver(Fp)
+
     benchLogger = BenchmarkLogger.get(myid)
 
-    def point(i): return Fp(i+1)  # TODO: make it use omega
+    point = EvalPoint(Fp, n, use_fft=use_fft)
 
     _taskSub, subscribe = subscribeRecv(recv)
     del recv  # ILC enforces this in type system, no duplication of reads
@@ -150,6 +167,7 @@ async def batch_reconstruct(elem_batches, p, t, n, myid, send, recv, debug=False
             f_poly = Poly(chunk)
             for j in range(n):
                 toSend[j].append(f_poly(point(j)).value)  # send just the int value
+
         # print('batch to send:', toSend)
         for j in range(n):
             send(j, toSend[j])
@@ -179,7 +197,7 @@ async def batch_reconstruct(elem_batches, p, t, n, myid, send, recv, debug=False
     reconsR2 = reconsR2[:len(elem_batches)]
 
     # Step 3: Send R2 points
-    sendBatch(reconsR2, wrapSend('R2', send), lambda _: Fp(0))
+    sendBatch(reconsR2, wrapSend('R2', send), lambda _: point.zero())
 
     # Step 4: Attempt to reconstruct R2
     for nAvailable in range(nAvailable, n + 1):
@@ -233,10 +251,11 @@ async def batch_reconstruct_one(shared_secrets, p, t, n, myid, send, recv, debug
     Fp = GF.get(p)
     Poly = polynomialsOver(Fp)
 
-    def point(i): return Fp(i+1)  # TODO: make it use omega
+    def point(i):
+        return Fp(i + 1)  # TODO: make it use omega
 
     # Reconstruct a batch of exactly t+1 secrets
-    assert len(shared_secrets) == t+1
+    assert len(shared_secrets) == t + 1
 
     # We'll wait to receive between 2t+1 shares
     round1_shares = [asyncio.Future() for _ in range(n)]
@@ -246,10 +265,10 @@ async def batch_reconstruct_one(shared_secrets, p, t, n, myid, send, recv, debug
         while True:
             (j, (r, o)) = await recv()
             if r == 'R1':
-                assert(not round1_shares[j].done())
+                assert (not round1_shares[j].done())
                 round1_shares[j].set_result(o)
             elif r == 'R2':
-                assert(not round2_shares[j].done())
+                assert (not round2_shares[j].done())
                 round2_shares[j].set_result(o)
             else:
                 assert False, f"invalid round tag: {r}"
