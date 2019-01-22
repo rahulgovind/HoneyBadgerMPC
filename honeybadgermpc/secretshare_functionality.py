@@ -1,7 +1,9 @@
 import asyncio
 import random
+import logging
 from .field import GF, GFElement
 from .polynomial import polynomialsOver
+from .elliptic_curve import Subgroup
 
 """
 Ideal functionality for Asynchronous Verifiable Secret Sharing (AVSS or SecretShare)
@@ -17,7 +19,7 @@ singleton Functionality.
 """
 
 # Fix the field for now
-Field = GF.get(0x73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001)
+Field = GF.get(Subgroup.BLS12_381)
 Poly = polynomialsOver(Field)
 
 
@@ -80,24 +82,24 @@ async def test1(sid='sid', N=4, f=1, Dealer=0):
 
     # Output (promises) are available, but not resolved yet
     for i in range(N):
-        print(i, parties[i].output)
+        logging.info(f"{i} {parties[i].output}")
 
     # Show the shared functionality
-    print(parties[0]._instances[sid])
+    logging.info(parties[0]._instances[sid])
 
     # Provide input
     v = Field(random.randint(0, Field.modulus-1))
-    print("Dealer's input:", v)
+    logging.info(f"Dealer's input: {v}")
     parties[Dealer].inputFromDealer.set_result(v)
 
     # Now can await output from each AVSS protocol
     for i in range(N):
         await parties[i].output
-        print(i, parties[i].output)
+        logging.info(f"{i} {parties[i].output}")
 
     # Reconstructed
     rec = Poly.interpolate_at([(i+1, parties[i].output.result()) for i in range(f+1)])
-    print("Reconstruction:", rec)
+    logging.info(f"Reconstruction: {rec}")
 
 
 if __name__ == '__main__':

@@ -1,11 +1,13 @@
 from lib_solver import ffi, lib
+from honeybadgermpc.elliptic_curve import Subgroup
+import logging
 
 
 def int2hexbytes(n):
     return bytes(hex(n), 'ascii')[2:]
 
 
-P = 0x73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001
+P = Subgroup.BLS12_381
 _HEX_P = int2hexbytes(P)
 
 _C_RET_INVALID = 1
@@ -38,7 +40,7 @@ def solve(dc_sums):
     if res == 0:
         return [int(ffi.string(m), 16) for m in ffi_messages]
     elif res == _C_RET_INVALID:
-        print("[ERROR]: Invalid code returned from C++ solver.")
+        logging.info("[ERROR]: Invalid code returned from C++ solver.")
         return None
     elif res == _C_RET_INPUT_ERROR:
         raise ValueError

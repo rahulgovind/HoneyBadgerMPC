@@ -2,12 +2,11 @@ import random
 from math import log
 import os
 import asyncio
+import logging
 from itertools import islice
-from operator import __mul__, __floordiv__
 from honeybadgermpc.mpc import (
     Field, Poly, generate_test_triples, write_polys, TaskProgramRunner
 )
-from honeybadgermpc.logger import BenchmarkLogger
 from time import time
 
 
@@ -19,7 +18,7 @@ filecount = 0
 
 async def wait_for_preprocessing():
     while not os.path.exists(f"{sharedatadir}/READY"):
-        print(f"waiting for preprocessing {sharedatadir}/READY")
+        logging.info(f"waiting for preprocessing {sharedatadir}/READY")
         await asyncio.sleep(1)
 
 
@@ -69,13 +68,14 @@ def getNTriplesAndSbits(tripleshares, randshares, n):
     return As, Bs, ABs, sbits
 
 
-async def permutationNetwork(ctx, inputs, k, delta, randshares, tripleshares):
+async def iterated_butterfly_network(ctx, inputs, k, delta, randshares, tripleshares):
     # This runs O(log k) iterations of the butterfly permutation network,
     # each of which has log k elements. The total number of switches is
     # k (log k)^2
     assert k == len(inputs)
     assert k & (k-1) == 0, "Size of input must be a power of 2"
-    benchLogger = BenchmarkLogger.get(ctx.myid)
+    benchLogger = logging.LoggerAdapter(
+        logging.getLogger("benchmark_logger"), {"node_id": ctx.myid})
     iteration = 0
     num_iterations = int(log(k, 2))
     for cur_iter in range(num_iterations):
@@ -103,48 +103,19 @@ async def permutationNetwork(ctx, inputs, k, delta, randshares, tripleshares):
     return inputs
 
 
-async def benesNetwork(ctx, inputs, k, delta, randshares, tripleshares):
-    assert k == len(inputs)
-    assert k & (k-1) == 0, "Size of input must be a power of 2"
-    benchLogger = BenchmarkLogger.get(ctx.myid)
-    iteration = 0
-    for j in range(2):
-        s, e, op = (1, k, __mul__) if j == 0 else (k//2, 1, __floordiv__)
-        while s != e:
-            stime = time()
-            As, Bs, ABs, sbits = getNTriplesAndSbits(tripleshares, randshares, k//2)
-            Xs, Ys = [], []
-            first = True
-            i = 0
-            while i < k:
-                for _ in range(s):
-                    arr = Xs if first else Ys
-                    arr.append(inputs[i])
-                    i += 1
-                first = not first
-            assert len(Xs) == len(Ys)
-            assert len(Xs) != 0
-            result = await batchSwitch(ctx, Xs, Ys, sbits, As, Bs, ABs, k)
-            inputs = [*sum(zip(result[0], result[1]), ())]
-            s = op(s, 2)
-            benchLogger.info(f"[BenesNetwork-{iteration}]: {time()-stime}")
-            iteration += 1
-    return inputs
-
-
-async def butterflyNetwork(ctx, **kwargs):
+async def butterfly_network_helper(ctx, **kwargs):
     k, delta = kwargs['k'], kwargs['delta']
     inputs = list(map(lambda x: x.v, list(ctx._rands)[:k]))
     tripleshares = ctx.read_shares(open(f'{triplesprefix}-{ctx.myid}.share'))
     randshares = ctx.read_shares(open(f'{oneminusoneprefix}-{ctx.myid}.share'))
-    print(f"[{ctx.myid}] Running permutation network.")
-    shuffled = await permutationNetwork(
+    logging.info(f"[{ctx.myid}] Running permutation network.")
+    shuffled = await iterated_butterfly_network(
         ctx, inputs, k, delta, iter(randshares), iter(tripleshares)
     )
     if shuffled is not None:
         shuffledShares = ctx.ShareArray(list(map(ctx.Share, shuffled)))
         openedValues = await shuffledShares.open()
-        print(f"[{ctx.myid}]", openedValues)
+        logging.info(f"[{ctx.myid}] {openedValues}")
         return shuffledShares
     return None
 
@@ -162,11 +133,11 @@ def runButterlyNetworkInTasks():
     NUM_SWITCHES = k * int(log(k, 2)) ** 2
 
     os.makedirs("sharedata/", exist_ok=True)
-    print('Generating random shares of triples in sharedata/')
+    logging.info('Generating random shares of triples in sharedata/')
     generate_test_triples(triplesprefix, 2*NUM_SWITCHES, N, t)
-    print('Generating random shares of 1/-1 in sharedata/')
+    logging.info('Generating random shares of 1/-1 in sharedata/')
     generate_random_shares(oneminusoneprefix, NUM_SWITCHES, N, t)
-    print('Generating random inputs in sharedata/')
+    logging.info('Generating random inputs in sharedata/')
     generate_test_randoms(random_files_prefix, k, N, t)
 
     asyncio.set_event_loop(asyncio.new_event_loop())
@@ -174,7 +145,7 @@ def runButterlyNetworkInTasks():
     loop.set_debug(True)
     try:
         programRunner = TaskProgramRunner(N, t)
-        programRunner.add(butterflyNetwork, k=k, delta=delta)
+        programRunner.add(butterfly_network_helper, k=k, delta=delta)
         loop.run_until_complete(programRunner.join())
     finally:
         loop.close()
@@ -226,11 +197,11 @@ if __name__ == "__main__":
             if nodeid == 0:
                 NUM_SWITCHES = k * int(log(k, 2)) ** 2
                 os.makedirs("sharedata/", exist_ok=True)
-                print('Generating random shares of triples in sharedata/')
+                logging.info('Generating random shares of triples in sharedata/')
                 generate_test_triples(triplesprefix, 2 * NUM_SWITCHES, N, t)
-                print('Generating random shares of 1/-1 in sharedata/')
+                logging.info('Generating random shares of 1/-1 in sharedata/')
                 generate_random_shares(oneminusoneprefix, NUM_SWITCHES, N, t)
-                print('Generating random inputs in sharedata/')
+                logging.info('Generating random inputs in sharedata/')
                 generate_test_randoms(random_files_prefix, k, N, t)
                 os.mknod(f"{sharedatadir}/READY")
             else:
@@ -238,7 +209,7 @@ if __name__ == "__main__":
 
         programRunner = ProcessProgramRunner(network_info, N, t, nodeid)
         loop.run_until_complete(programRunner.start())
-        programRunner.add(0, butterflyNetwork, k=k, delta=delta)
+        programRunner.add(0, butterfly_network_helper, k=k, delta=delta)
         loop.run_until_complete(programRunner.join())
         loop.run_until_complete(programRunner.close())
     finally:
