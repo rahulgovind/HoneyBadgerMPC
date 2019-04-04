@@ -47,3 +47,4 @@ RUN pip install --no-cache-dir -e .[$BUILD]
 RUN make -C apps/shuffle/cpp
 
 RUN echo "alias cls=\"clear && printf '\e[3J'\"" >> ~/.bashrc
+RUN pip install jupyter

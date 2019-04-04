@@ -98,6 +98,7 @@ class Mpc(object):
         def _send(j, o):
             (tag, share) = o
             self.send(j, (tag, shareid, share))
+
         _recv = self._sharearray_buffers[shareid].get
 
         opening = batch_reconstruct([s.v for s in sharearray._shares],
@@ -161,7 +162,6 @@ class Mpc(object):
 ###############
 
 def share_in_context(context):
-
     def _binop_field(fut, other, op):
         assert type(other) in [ShareFuture, GFElementFuture, Share, GFElement]
         if isinstance(other, ShareFuture) or isinstance(other, Share):
@@ -170,10 +170,14 @@ def share_in_context(context):
             res = GFElementFuture()
 
         if isinstance(other, asyncio.Future):
-            def cb(f): return res.set_result(op(fut.result(), other.result()))
+            def cb(f):
+                return res.set_result(op(fut.result(), other.result()))
+
             asyncio.gather(fut, other).add_done_callback(cb)
         else:
-            def cb(f): return res.set_result(op(fut.result(), other))
+            def cb(f):
+                return res.set_result(op(fut.result(), other))
+
             fut.add_done_callback(cb)
         return res
 
@@ -201,6 +205,7 @@ def share_in_context(context):
             res = GFElementFuture()
 
             def cb(f): return res.set_result(f.result())
+
             opening = asyncio.ensure_future(context.open_share(self))
             # context._newopening.put_nowait(opening)
             opening.add_done_callback(cb)
@@ -217,8 +222,12 @@ def share_in_context(context):
                 return Share(self.v + other.v, self.t)
 
         def __sub__(self, other):
-            assert self.t == other.t, f"{self.t} {other.t}"
-            return Share(self.v - other.v, self.t)
+            if isinstance(other, GFElement):
+                return Share(self.v - other, self.t)
+            elif isinstance(other, Share):
+                assert self.t == other.t, f"{self.t} {other.t}"
+                return Share(self.v - other.v, self.t)
+
         __radd__ = __add__
 
         def __rsub__(self, other):
@@ -226,7 +235,8 @@ def share_in_context(context):
             return Share(-self.v + other.v, self.t)
 
         # @typecheck(int,field)
-        def __rmul__(self, other): return Share(self.v * other, self.t)
+        def __rmul__(self, other):
+            return Share(self.v * other, self.t)
 
         # TODO
         def __mul__(self, other):
@@ -237,16 +247,21 @@ def share_in_context(context):
             else:
                 raise NotImplementedError
 
-        def __str__(self): return '{%d}' % (self.v)
+        def __str__(self):
+            return '{%d}' % (self.v)
 
     def _binop_share(fut, other, op):
         assert type(other) in [ShareFuture, GFElementFuture, Share, GFElement]
         res = ShareFuture()
         if isinstance(other, asyncio.Future):
-            def cb(f): return res.set_result(op(fut.result(), other.result()))
+            def cb(f):
+                return res.set_result(op(fut.result(), other.result()))
+
             asyncio.gather(fut, other).add_done_callback(cb)
         else:
-            def cb(f): return res.set_result(op(fut.result(), other))
+            def cb(f):
+                return res.set_result(op(fut.result(), other))
+
             fut.add_done_callback(cb)
         return res
 
@@ -266,6 +281,7 @@ def share_in_context(context):
             def cb2(sh): return res.set_result(sh.result())
 
             def cb1(f): return self.result().open().add_done_callback(cb2)
+
             self.add_done_callback(cb1)
             return res
 
@@ -285,6 +301,7 @@ def share_in_context(context):
             res = asyncio.Future()
 
             def cb(f): return res.set_result(f.result())
+
             opening = asyncio.create_task(context.open_share_array(self))
             opening.add_done_callback(cb)
             return res
@@ -294,13 +311,13 @@ def share_in_context(context):
                 result = []
                 for (a, b) in zip(self._shares, other):
                     assert type(b) is GFElement, type(b)
-                    result.append(a+b)
+                    result.append(a + b)
                 return ShareArray(result, self.t)
             if isinstance(other, ShareArray):
                 assert self.t == other.t
                 assert len(self._shares) == len(other._shares)
                 return ShareArray(
-                    [(a+b) for (a, b) in zip(self._shares, other._shares)], self.t)
+                    [(a + b) for (a, b) in zip(self._shares, other._shares)], self.t)
             raise NotImplementedError
 
         def __sub__(self, other):
@@ -308,7 +325,7 @@ def share_in_context(context):
                 assert self.t == other.t
                 assert len(self._shares) == len(other._shares)
                 return ShareArray(
-                    [(a-b) for (a, b) in zip(self._shares, other._shares)], self.t)
+                    [(a - b) for (a, b) in zip(self._shares, other._shares)], self.t)
 
         def __mul__(self, other):
             if MixinOpName.MultiplyShareArray in context.config:
@@ -384,7 +401,7 @@ async def test_prog1(context):
     # This is a random share of x*y
     logging.info(f'type(d): {type(d)}')
     logging.info(f'type(b): {type(b)}')
-    xy = d*e + d*b + e*a + ab
+    xy = d * e + d * b + e * a + ab
 
     logging.info(f'type(x): {type(x)}')
     logging.info(f'type(y): {type(y)}')
