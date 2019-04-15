@@ -18,6 +18,33 @@ Field = GF.get(p)
 USE_RANDOM_BIT_PPE = True
 
 
+async def open_single(ctx, x, t=None):
+    return await ctx.Share(x, t).open()
+
+
+async def reduce_single(ctx, x):
+    x = ctx.Share(x, 2 * ctx.t)
+    r_t, r_2t = ppe.get_double_share(ctx)
+    diff = await (x - r_2t).open()
+    return diff + r_t.v
+
+
+async def trunc_pr_single(ctx, x, k, m):
+    """
+    k: Maximum number of bits
+    m: Truncation bits
+    """
+    assert k > m
+    r1, _ = await random2m(ctx, m)
+    r2, _ = await random2m(ctx, k + KAPPA - m)
+    r2 = ctx.Share(r2.v * Field(2) ** m)
+
+    c = await ctx.Share(x + Field(2 ** (k - 1)) + r1.v + r2.v).open()
+    c2 = c.value % (2 ** m)
+    d = (x - Field(c2) + r1.v) * ~(Field(2) ** m)
+    return d
+
+
 async def random_bit_share(ctx):
     if USE_RANDOM_BIT_PPE:
         return ppe.get_random_bit(ctx)
@@ -179,6 +206,118 @@ class FixedPoint(object):
         raise NotImplementedError
 
 
+def fixed_point_repr(x):
+    return int(x * 2 ** F)
+
+
+class SuperFixedPoint(object):
+    def __init__(self, ctx, x):
+        self.ctx = ctx
+        if type(x) in [int, float]:
+            self.data = asyncio.Future()
+            self.data.set_result(ppe.get_zero(ctx).v + fixed_point_repr(x))
+            self.is_future = False
+        elif type(x) is ctx.Share:
+            self.data = asyncio.Future()
+            self.data.set_result(x.v)
+            asyncio.ensure_future(self.data)
+            self.is_future = False
+        elif type(x) is asyncio.Future:
+            self.is_future = True
+            self.data = x
+        else:
+            raise NotImplementedError
+
+    def __add__(self, other):
+        if type(other) is not SuperFixedPoint:
+            other = SuperFixedPoint(self.ctx, other)
+        res = SuperFixedPoint(self.ctx, asyncio.Future())
+
+        def callback(_):
+            res.data.set_result(self.data.result() + other.data.result())
+
+        asyncio.gather(self.data, other.data).add_done_callback(callback)
+        return res
+
+    __radd__ = __add__
+
+    def __sub__(self, other):
+        if type(other) is not SuperFixedPoint:
+            other = SuperFixedPoint(self.ctx, other)
+
+        res = SuperFixedPoint(self.ctx, asyncio.Future())
+
+        def callback(_):
+            res.data.set_result(self.data.result() - other.data.result())
+
+        asyncio.gather(self.data, other.data).add_done_callback(callback)
+        return res
+
+    def __rsub__(self, other):
+        return -(other.__sub__(self))
+
+    def __neg__(self):
+        res = SuperFixedPoint(self.ctx, asyncio.Future())
+
+        def callback(_):
+            res.data.set_result(-self.data.result())
+
+        self.data.add_done_callback(callback)
+        return res
+
+    def __mul__(self, other):
+        assert type(other) in [int, float, SuperFixedPoint]
+        if type(other) is not SuperFixedPoint:
+            other = SuperFixedPoint(self.ctx, other)
+        res = SuperFixedPoint(self.ctx, asyncio.Future())
+
+        def reduce_callback(_):
+            fut = asyncio.ensure_future(reduce_single(self.ctx,
+                                                      self.data.result() *
+                                                      other.data.result()))
+            fut.add_done_callback(trunc_callback)
+
+        def trunc_callback(val):
+            fut = asyncio.ensure_future(trunc_pr_single(self.ctx, val.result(),
+                                                        2 * K, F))
+            fut.add_done_callback(result_callback)
+
+        def result_callback(val):
+            res.data.set_result(val.result())
+
+        asyncio.gather(self.data, other.data).add_done_callback(reduce_callback)
+        return res
+
+    __rmul__ = __mul__
+
+    def __truediv__(self, other):
+        assert type(other) in [int, float]
+        inv = SuperFixedPoint(self.ctx, 1.0 / other)
+        return self * inv
+
+    def open(self):
+        res = asyncio.Future()
+
+        def data_callback(_):
+            fut = asyncio.ensure_future(open_single(self.ctx, self.data.result()))
+            return fut.add_done_callback(opening_callback)
+
+        def opening_callback(val):
+            x = val.result().value
+            if x >= 2 ** (K - 1):
+                x = -(p - x)
+
+            return res.set_result(float(x) / 2 ** F)
+
+        self.data.add_done_callback(data_callback)
+        return res
+
+
+class FixedPointNDArray(object):
+    def __init__(self, ctx, x):
+        pass
+
+
 async def linear_regression_mpc(ctx, X, y, m_current=0, b_current=0, epochs=1,
                                 learning_rate=0.01):
     N = len(X)
@@ -204,6 +343,22 @@ async def linear_regression_mpc(ctx, X, y, m_current=0, b_current=0, epochs=1,
     return m_current, b_current
 
 
+async def linear_regression_mpc2(ctx, X, y, epochs=1,
+                                 learning_rate=0.01):
+    N = len(X)
+    m_current = SuperFixedPoint(ctx, 0)
+    b_current = SuperFixedPoint(ctx, 0)
+    for epoch in range(epochs):
+        y_current = [(m_current * x + b_current) for x in X]
+        m_gradient = -(sum((y[i] - y_current[i]) * X[i] for i in range(N))) / N
+        b_gradient = -(sum((y[i] - y_current[i]) for i in range(N))) / N
+        m_current = m_current - learning_rate * m_gradient
+        b_current = b_current - learning_rate * b_gradient
+        print(f"EPOCH {epoch}", "m_current: ", await m_current.open(), "b_current: ",
+              await b_current.open())
+    return m_current, b_current
+
+
 async def test_multiplication(ctx):
     for i in range(100):
         random.seed(i)
@@ -218,32 +373,35 @@ async def test_multiplication(ctx):
 
 
 async def _prog(ctx):
-#     x = FixedPoint(ctx, 59.0)
-#     y = FixedPoint(ctx, 58.6)
-#     start_time = time.time()
-#     t = await x.mul(y)
-#     end_time = time.time()
-#     print("Multiplication time: ", end_time - start_time)
-#     # print(await t.open())
-    m, b = await linear_regression_mpc(ctx,
-                                       [FixedPoint(ctx, 1), FixedPoint(ctx, 2),
-                                        FixedPoint(ctx, 3), FixedPoint(ctx, 4),
-                                        FixedPoint(ctx, 5), FixedPoint(ctx, 6),
-                                        FixedPoint(ctx, 7)],
-                                       [FixedPoint(ctx, 2), FixedPoint(ctx, 3),
-                                        FixedPoint(ctx, 4), FixedPoint(ctx, 5),
-                                        FixedPoint(ctx, 6), FixedPoint(ctx, 7),
-                                        FixedPoint(ctx, 8)],
-                                       learning_rate=0.05,
-                                       epochs=100)
-    await test_multiplication(ctx)
-    print(await m.open(), await b.open())
+    # a = SuperFixedPoint(ctx, 1.0)
+    # b = SuperFixedPoint(ctx, 2.0)
+    # c = SuperFixedPoint(ctx, 3.0)
+    # d = (a * b * c) / 3
+    # print(await d.open())
+    m, b = await linear_regression_mpc2(ctx,
+                                        [SuperFixedPoint(ctx, 1),
+                                         SuperFixedPoint(ctx, 2),
+                                         SuperFixedPoint(ctx, 3),
+                                         SuperFixedPoint(ctx, 4),
+                                         SuperFixedPoint(ctx, 5),
+                                         SuperFixedPoint(ctx, 6)],
+                                        [SuperFixedPoint(ctx, 2),
+                                         SuperFixedPoint(ctx, 3),
+                                         SuperFixedPoint(ctx, 4),
+                                         SuperFixedPoint(ctx, 5),
+                                         SuperFixedPoint(ctx, 6),
+                                         SuperFixedPoint(ctx, 7),
+                                         SuperFixedPoint(ctx, 8)],
+                                        learning_rate=0.05,
+                                        epochs=100)
+    # await test_multiplication(ctx)
+    # print(await m.open(), await b.open())
 
 
 if __name__ == "__main__":
-    n = 4
+    n = 5
     t = 1
-
+    multiprocess = False
     ppe = PreProcessedElements()
     logging.info("Generating zeros in sharedata/")
     ppe.generate_zeros(1000, n, t)
@@ -253,6 +411,8 @@ if __name__ == "__main__":
     ppe.generate_rands(10000, n, t)
     logging.info('Generating random shares of triples in sharedata/')
     ppe.generate_triples(10000, n, t)
+    logging.info("Generating random doubles in sharedata/")
+    ppe.generate_double_shares(10000, n, t)
 
     # logging.info('Generating random shares of bits in sharedata/')
     # ppe.generate_bits(1000, n, t)
@@ -261,12 +421,30 @@ if __name__ == "__main__":
     asyncio.set_event_loop(asyncio.new_event_loop())
     loop = asyncio.get_event_loop()
     try:
-        # programRunner = TaskProgramRunner(n, t, {
-        #     MixinOpName.MultiplyShare: BeaverTriple.multiply_shares})
-        program_runner = TaskProgramRunner(n, t, {
-            MixinOpName.MultiplyShare: BeaverTriple.multiply_shares})
-        program_runner.add(_prog)
-        loop.run_until_complete(program_runner.join())
+        config = {MixinOpName.MultiplyShare: BeaverTriple.multiply_shares}
+        if multiprocess:
+            from honeybadgermpc.config import HbmpcConfig
+            from honeybadgermpc.ipc import ProcessProgramRunner
+
+
+            async def _process_prog(peers, n, t, my_id):
+                program_runner = ProcessProgramRunner(peers, n, t, my_id,
+                                                      config)
+                await program_runner.start()
+                # send, recv = program_runner.get_send_and_recv(0)
+
+                program_runner.add(1, _prog)
+                await program_runner.join()
+                await program_runner.close()
+
+
+            loop.run_until_complete(_process_prog(
+                HbmpcConfig.peers, HbmpcConfig.N, HbmpcConfig.t,
+                HbmpcConfig.my_id))
+        else:
+            program_runner = TaskProgramRunner(n, t, config)
+            program_runner.add(_prog)
+            loop.run_until_complete(program_runner.join())
     finally:
         loop.close()
 

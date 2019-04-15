@@ -51,7 +51,7 @@ class DoubleSharing(MixinBase):
 
         r_t, r_2t = MixinBase.pp_elements.get_double_share(context)
         diff = await (x_2t - r_2t).open()
-        return context.Share(await (r_t + diff).open())
+        return context.Share(r_t + diff)
 
     @staticmethod
     async def reduce_degree_share_array(context, x_2t):
