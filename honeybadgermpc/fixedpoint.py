@@ -7,6 +7,8 @@ from honeybadgermpc.mixins import BeaverTriple, MixinOpName
 from honeybadgermpc.elliptic_curve import Subgroup
 from honeybadgermpc.field import GF, GFElement
 import random
+import numpy as np
+import threading
 
 ppe = None
 
@@ -16,10 +18,19 @@ K = 64
 p = modulus = Subgroup.BLS12_381
 Field = GF.get(p)
 USE_RANDOM_BIT_PPE = True
+random_lock = threading.Lock()
 
 
 async def open_single(ctx, x, t=None):
     return await ctx.Share(x, t).open()
+
+
+async def open_array(ctx, arr, t=None):
+    return await ctx.ShareArray(list(arr), t).open()
+
+
+async def open_nd_array(ctx, arr, t=None):
+    return np.array(await open_array(ctx, arr.flatten().tolist(), t)).reshape(arr.shape)
 
 
 async def reduce_single(ctx, x):
@@ -27,6 +38,22 @@ async def reduce_single(ctx, x):
     r_t, r_2t = ppe.get_double_share(ctx)
     diff = await (x - r_2t).open()
     return diff + r_t.v
+
+
+async def reduce_array(ctx, arr):
+    r_t, r_2t = [], []
+    for _ in range(len(arr)):
+        r_t_, r_2t_ = ppe.get_double_share(ctx)
+        r_t.append(r_t_.v)
+        r_2t.append(r_2t_.v)
+
+    diff = await open_array(ctx, list(map(lambda x, y: x - y, arr, r_2t)), 2 * ctx.t)
+
+    return list(map(lambda x, y: x + y, diff, r_t))
+
+
+async def reduce_nd_array(ctx, arr):
+    return np.array(await reduce_array(ctx, arr.flatten().tolist())).reshape(arr.shape)
 
 
 async def trunc_pr_single(ctx, x, k, m):
@@ -60,6 +87,49 @@ async def random_bit_share(ctx):
         return (~Field(2)) * ((~root) * r + Field(1))
 
 
+async def random_bit_shares(ctx, n):
+    if USE_RANDOM_BIT_PPE:
+        return ppe.get_random_bits(ctx, n)
+    else:
+        raise NotImplementedError
+
+
+async def randoms2m(ctx, m, n):
+    all_bits = await random_bit_shares(ctx, m * n)
+
+    # Split bits into n parts
+    # For each chunk compute the sum (2 ** i * chunk[i])
+    bits = []
+    powsums = []
+
+    for i in range(0, m * n, m):
+        chunk = all_bits[i:i + m]
+        powsum = sum(Field(2) ** j * chunk[j] for j in range(m))
+        bits.append(chunk)
+        powsums.append(powsum)
+    return powsums, bits
+
+
+async def trunc_pr_array(ctx, arr, k, m):
+    assert k > m
+    batch_size = len(arr)
+    r1, _ = await randoms2m(ctx, m, batch_size)
+    r2, _ = await randoms2m(ctx, k + KAPPA - m, batch_size)
+    r2 = [x * Field(2) ** m for x in r2]
+    c_shares = list(map(lambda xi, r1i, r2i: xi + Field(2 ** (k - 1)) + r1i + r2i,
+                        arr, r1, r2))
+    c = await open_array(ctx, c_shares)
+    c = list(map(lambda x: ctx.field(x.value % (2 ** m)), c))
+    d = list(map(lambda x, ci, r1i: (x - ci + r1i) * ~(Field(2) ** m),
+                 arr, c, r1))
+    return d
+
+
+async def trunc_pr_nd_array(ctx, arr, k, m):
+    res = await trunc_pr_array(ctx, arr.flatten().tolist(), k, m)
+    return np.array(res).reshape(arr.shape)
+
+
 async def random2m(ctx, m):
     result = ctx.Share(0)
     bits = []
@@ -85,16 +155,73 @@ async def trunc_pr(ctx, x, k, m):
     return d
 
 
-def to_bits(x, k):
+def binary_repr(x, k):
     """
     Convert x to a k-bit representation
     Least significant bit first
     """
-    res = []
-    for i in range(k):
-        res.append(x % 2)
-        x //= 2
+
+    def _binary_repr(v):
+        res = []
+        v = int(v)
+        for i in range(k):
+            res.append(v % 2)
+            v //= 2
+        return res
+
+    if type(x) is int:
+        return _binary_repr(x)
+    else:
+        assert type(x) is np.ndarray
+        assert x.ndim == 1
+        return np.array([_binary_repr(xi) for xi in x])
+
+
+async def binary_addition(ctx, x, y):
+    """
+    :param ctx:
+    :param x:
+    :param y:
+    :return:
+    """
+    assert x.ndim == 2
+    assert x.shape == y.shape
+
+    c = x * y
+    c = await reduce_nd_array(ctx, c)
+    d = x + y - 2 * c
+
+    for i in range(int(np.ceil(np.log2(x.shape[1])))):
+        t1, t2 = c[:, 2 ** i:] + (d[:, 2 ** i:] * c[:, :-2 ** i]), \
+                 d[:, 2 ** i:] * d[:, :-2 ** i]
+        t1 = await reduce_nd_array(ctx, t1)
+        t2 = await reduce_nd_array(ctx, t2)
+        c[:, 2 ** i:], d[:, 2 ** i:] = t1, t2
+
+    res = x + y - 2 * c
+    res[:, 1:] += c[:, :-1]
+    print("c: ", await open_nd_array(ctx, c))
     return res
+
+
+async def to_bits(ctx, x, k, m):
+    assert x.ndim == 1
+    batch_size = x.shape[0]
+    r1, r1_bits = await randoms2m(ctx, m, batch_size)
+    r1, r1_bits = np.array(r1), np.array(r1_bits)
+    r2, _ = await randoms2m(ctx, k + KAPPA - m, batch_size)
+    r2 = np.array(r2)
+    c = await open_nd_array(ctx, x - (r1 + r2 * 2 ** m) + 2 ** k + 2 ** (k + KAPPA))
+    return await binary_addition(ctx, binary_repr(c, m), r1_bits)
+
+
+def from_bits(arr):
+    assert arr.ndim == 2
+    assert arr.shape[1] > 0
+    result = arr[:, 0]
+    for i in range(1, arr.shape[1]):
+        result = result + arr[:, i] * 2 ** i
+    return result
 
 
 async def get_carry_bit(ctx, a_bits, b_bits, low_carry_bit=1):
@@ -116,13 +243,66 @@ async def get_carry_bit(ctx, a_bits, b_bits, low_carry_bit=1):
     return (await _bit_ltl_reduce(list(zip(carry_bits, all_one_bits))))[0]
 
 
+async def get_carry_bits(ctx, a_bits, b_bits, low_carry_bit=1):
+    assert a_bits.ndim <= 2 and b_bits.ndim <= 2
+    if a_bits.ndim == 1:
+        a_bits = a_bits.reshape(-1, 1)
+    if b_bits.ndim == 1:
+        b_bits = b_bits.reshape(-1, 1)
+    assert a_bits.shape == b_bits.shape
+
+    # Reverse bits
+    a_bits = a_bits[::-1]
+    b_bits = b_bits[::-1]
+
+    carry_bits = np.array(await reduce_nd_array(ctx, a_bits * b_bits))
+    all_one_bits = a_bits + b_bits - 2 * carry_bits
+
+    # Effectively batch size
+    m = 1 if len(a_bits.shape) == 1 else a_bits.shape[1]
+
+    # Append previous carry bit
+    new_row_shape = (1,) + carry_bits.shape[1:]
+    print(carry_bits.shape,
+          np.array([ctx.field(low_carry_bit) for _ in range(m)]).reshape(
+              new_row_shape).shape)
+    carry_bits = np.r_[carry_bits,
+                       np.array([ctx.field(low_carry_bit)
+                                 for _ in range(m)]).reshape(new_row_shape)]
+    all_one_bits = np.r_[all_one_bits,
+                         np.array([ctx.field(0)
+                                   for _ in range(m)]).reshape(new_row_shape)]
+
+    # Pad to make number of bits a power of 2
+    n = len(carry_bits)
+    if n & (n - 1) != 0:
+        new_n = 2 ** n.bit_length()
+        carry_bits = np.r_[carry_bits,
+                           np.array([[ctx.field(0) for _ in range(m)]
+                                     for _ in range(new_n - n)])]
+        all_one_bits = np.r_[all_one_bits,
+                             np.array([[ctx.field(0) for _ in range(m)]
+                                       for _ in range(new_n - n)])]
+
+    while carry_bits.shape[0] > 1:
+        # print("carry_bits.shape: ", carry_bits.shape)
+        temp1 = all_one_bits[0::2] * carry_bits[1::2]
+        temp1 = await reduce_nd_array(ctx, temp1)
+        temp1 = temp1 + carry_bits[0::2]
+
+        temp2 = all_one_bits[0::2] * all_one_bits[1::2]
+        temp2 = await reduce_nd_array(ctx, temp2)
+        carry_bits, all_one_bits = temp1, temp2
+    return carry_bits.flatten()
+
+
 async def bit_ltl(ctx, a, b_bits):
     """
     a: Public
     b: List of private bit shares. Least significant digit first
     """
     b_bits = [ctx.Share(Field(1) - bi.v) for bi in b_bits]
-    a_bits = [ctx.Share(ai) for ai in to_bits(int(a), len(b_bits))]
+    a_bits = [ctx.Share(ai) for ai in binary_repr(int(a), len(b_bits))]
 
     a_bits_opened = [(await a_bit.open()) for a_bit in a_bits]
     # print("a: ", a_bits_opened)
@@ -132,6 +312,50 @@ async def bit_ltl(ctx, a, b_bits):
 
     carry = await get_carry_bit(ctx, a_bits, b_bits)
     return ctx.Share(Field(1) - carry.v)
+
+
+async def bit_ltl2(ctx, a, b_bits):
+    """
+    a: Public
+    b: List of private bit shares. Least significant digit first
+    """
+    b_bits = [ctx.Share(Field(1) - bi.v) for bi in b_bits]
+    a_bits = [ctx.Share(ai) for ai in binary_repr(int(a), len(b_bits))]
+
+    a_bits_opened = [(await a_bit.open()) for a_bit in a_bits]
+    # print("a: ", a_bits_opened)
+
+    b_bits_opened = [(await b_bit.open()) for b_bit in b_bits]
+    # print("b: ", b_bits_opened)
+
+    carry = (await get_carry_bits(ctx,
+                                  np.array([x.v for x in a_bits]),
+                                  np.array([x.v for x in b_bits])))[0]
+
+    return ctx.Share(Field(1) - carry)
+
+
+async def bit_ltl_array(ctx, a, b):
+    assert (a.ndim == 1 and b.ndim == 2) or (a.ndim == 2 and b.ndim == 1)
+    assert a.shape[0] == b.shape[0]
+
+    def ones_complement(x):
+        return ctx.field(1) - x
+
+    nbits = a.shape[1] if a.ndim == 2 else b.shape[1]
+
+    def to_bits_field(x):
+        def _to_bits_field(x):
+            return [ctx.field(xi) for xi in binary_repr(int(x), nbits)]
+
+        return np.array([_to_bits_field(x[i]) for i in range(len(x))])
+
+    a_bits = to_bits_field(a) if a.ndim == 1 else a
+    b_bits = to_bits_field(b) if b.ndim == 1 else b
+    b_bits = np.vectorize(ones_complement)(b_bits)
+
+    carry_bits = await get_carry_bits(ctx, a_bits.T, b_bits.T)
+    return np.array(ctx.field(1)) - carry_bits
 
 
 async def mod2m(ctx, x, k, m):
@@ -146,10 +370,162 @@ async def mod2m(ctx, x, k, m):
     return a2
 
 
+async def mod2m_array(ctx, arr, k, m):
+    assert k > m
+    assert arr.ndim == 1
+    batch_size = len(arr)
+
+    def field_mod_2m(x):
+        return ctx.field(int(x) % (2 ** m))
+
+    r1, r1_bits = await randoms2m(ctx, m, batch_size)
+    r1, r1_bits = np.array(r1), np.array(r1_bits)
+    r2, _ = await randoms2m(ctx, k + KAPPA - m, batch_size)
+    r2 = np.array(r2)
+    r2 = Field(2) ** m * r2
+    c_shares = arr + Field(2 ** (k - 1)) + r1 + r2
+    c = await open_nd_array(ctx, c_shares)
+    c2 = np.vectorize(field_mod_2m)(c)
+    u = await bit_ltl_array(ctx, c2, r1_bits)
+    a2 = c2 - r1 + (2 ** m) * u
+    return a2
+
+
+async def mod_array(ctx, arr, k, x):
+    m = int(np.ceil(np.log2(x)))
+    assert k > m
+    assert arr.ndim == 1
+    batch_size = len(arr)
+
+    def field_mod_x(val):
+        return ctx.field(int(val) % x)
+
+    r1, r1_bits = await randoms2m(ctx, m, batch_size)
+    r1, r1_bits = np.array(r1), np.array(r1_bits)
+
+    r2, _ = await randoms2m(ctx, k + KAPPA - m, batch_size)
+    r2 = np.array(r2) * 2 ** m
+    c = await open_nd_array(ctx, arr + Field(2 ** (k - 1)) + x * r2 + r1)
+    c2 = np.vectorize(field_mod_x)(c)
+    print("c2: ", c2.shape, " r1_bits: ", r1_bits.shape)
+    v = ctx.field(1) - await bit_ltl_array(ctx, r1_bits,
+                                           np.array([ctx.field(x)
+                                                     for _ in range(len(arr))]))
+
+    u = await ltz_array(ctx, c2 - r1 + x * v, m)
+    a2 = c2 - r1 + x * (u + v)
+    print("u: ", await open_nd_array(ctx, u))
+    print("v: ", await open_nd_array(ctx, v))
+    return a2
+
+
+async def ltz_array(ctx, arr, k):
+    assert arr.ndim == 1
+    print("ltz: ", await open_nd_array(ctx, arr))
+    return -(await trunc_array(ctx, arr, k, k - 1))
+
+
 async def trunc(ctx, x, k, m):
     a2 = await mod2m(ctx, x, k, m)
     d = ctx.Share((x.v - a2.v) / (Field(2)) ** m)
     return d
+
+
+async def trunc_array(ctx, arr, k, m):
+    assert arr.ndim == 1
+    assert k > m
+    a2 = await mod2m_array(ctx, arr, k, m)
+    d = (arr - a2) / (Field(2) ** m)
+    return d
+
+
+async def pre_or(ctx, arr, reverse=False):
+    """
+    :param ctx:
+    :param arr:
+    :param reverse:
+    :return:
+
+    Only makes sense if the shares correspond to shares of bits
+    """
+    assert arr.ndim == 2
+    if reverse:
+        arr = arr[:, ::-1]
+
+    res = np.array(arr)
+    for i in range(int(np.ceil(np.log2(arr.shape[1])))):
+        res[:, 2 ** i:] = res[:, 2 ** i:] + res[:, :-2 ** i] - \
+                          res[:, 2 ** i:] * res[:, :-2 ** i]
+        res[:, 2 ** i:] = await reduce_nd_array(ctx, res[:, 2 ** i:])
+
+    if reverse:
+        res = res[:, ::-1]
+    return res
+
+
+async def norm(ctx, arr, k, f):
+    """
+    :param ctx:
+    :param arr:
+    :param k:
+    :param f:
+    :return:
+
+    Source: Catrina et al, Secure Computation With Fixed-Point Numbers
+    """
+    assert arr.ndim == 1
+
+    s = 1 - 2 * (await ltz_array(ctx, arr, k))
+
+    x = await reduce_nd_array(ctx, s * arr)
+    x_bits = await to_bits(ctx, x, k, k)
+
+    y_bits = await pre_or(ctx, x_bits, reverse=True)
+
+    z = y_bits[:, :-1] - y_bits[:, 1:]
+    pow2_reverse = np.array([[ctx.field(2) ** (k - i - 1) for i in range(k - 1)]])
+
+    # Unsigned normalization factor
+    v = np.sum(z * pow2_reverse, axis=1)
+
+    # Signed normalization factor
+    v2 = await reduce_nd_array(ctx, s * v)
+
+    # Unsigned normalized quantity c \in [0.5, 1) with 2^-k precision <- IMPORTANT!
+    # c <- Q^+_{k,k}
+    c = await reduce_nd_array(ctx, x * v)
+
+    return c, v2
+
+
+async def _approx_reciprocal(ctx, arr, k, f):
+    alpha = to_fixed_point_repr(2.9142, k)  # 2^{-k} precision, ~k+2 bits used
+    c, v = await norm(ctx, arr, k, f)
+    d = alpha - 2 * c  # 2^{-k} precision, ~k+1 bits used
+    d_opened = await open_array(ctx, d)
+    print("d: ", np.vectorize(from_fixed_point_repr)(d_opened, K, K - 1, False))
+    v_opened = await open_array(ctx, v)
+    print("v: ", np.vectorize(from_fixed_point_repr)(v_opened, K, F))
+    w = await reduce_nd_array(ctx, d * v)  # 2^{-k-f} precision. 2k+1 bits used
+    w = await trunc_pr_nd_array(ctx, w, 2 * k + 1, k)
+    return w
+
+
+async def fpdiv(ctx, a, b, k, f):
+    theta = int(np.ceil(np.log(k / 3.5)))
+    alpha = ctx.field(to_fixed_point_repr(1, 2 * f))
+    w = await _approx_reciprocal(ctx, b, k, f)
+    x = alpha - (await reduce_nd_array(ctx, b * w))
+    y = await reduce_nd_array(ctx, a * w)
+    y = await trunc_pr_nd_array(ctx, y, 2 * k, f)
+    for i in range(theta):
+        y = await reduce_nd_array(ctx, y * (alpha + x))
+        x = await reduce_nd_array(ctx, x * x)
+        y = await trunc_pr_nd_array(ctx, y, 2 * k, 2 * f)
+        x = await trunc_pr_nd_array(ctx, x, 2 * k, 2 * f)
+    y = await reduce_nd_array(ctx, y * (alpha + x))
+    y = await trunc_pr_nd_array(ctx, y, 2 * k, 2 * f)
+    return y
 
 
 class FixedPoint(object):
@@ -206,8 +582,16 @@ class FixedPoint(object):
         raise NotImplementedError
 
 
-def fixed_point_repr(x):
-    return int(x * 2 ** F)
+def to_fixed_point_repr(x, f=F):
+    return int(x * 2 ** f)
+
+
+def from_fixed_point_repr(x, k=K, f=F, signed=True):
+    x = x.value
+    if x >= 2 ** (k - 1) and signed:
+        x = -(p - x)
+
+    return float(x) / 2 ** f
 
 
 class SuperFixedPoint(object):
@@ -215,7 +599,7 @@ class SuperFixedPoint(object):
         self.ctx = ctx
         if type(x) in [int, float]:
             self.data = asyncio.Future()
-            self.data.set_result(ppe.get_zero(ctx).v + fixed_point_repr(x))
+            self.data.set_result(ppe.get_zero(ctx).v + to_fixed_point_repr(x))
             self.is_future = False
         elif type(x) is ctx.Share:
             self.data = asyncio.Future()
@@ -313,9 +697,240 @@ class SuperFixedPoint(object):
         return res
 
 
+def get_broadcast_shape(shape1, shape2):
+    # Super inefficient. Needs to be improved
+    return np.broadcast(np.empty(shape1), np.empty(shape2)).shape
+
+
 class FixedPointNDArray(object):
-    def __init__(self, ctx, x):
-        pass
+    def __init__(self, ctx, x, shape=None):
+        self.ctx = ctx
+        if type(x) in [int, float]:
+            self.data = asyncio.Future()
+            self.data.set_result(ppe.get_zero(ctx).v + to_fixed_point_repr(x))
+            self.is_future = False
+        if type(x) is asyncio.Future:
+            assert shape is not None
+            self.is_future = True
+            self.data = x
+            self.shape = shape
+        else:
+            def convert(z):
+                return ppe.get_zero(ctx).v + ctx.field(to_fixed_point_repr(z))
+
+            convert = np.vectorize(convert)
+
+            self.data = asyncio.Future()
+            x = np.array(x)
+            if x.dtype not in [np.float64, np.int64]:
+                print("Dtype is ", x.dtype)
+                raise NotImplementedError
+
+            self.data.set_result(convert(x))
+            self.shape = x.shape
+
+    def __add__(self, other):
+        if type(other) is not FixedPointNDArray:
+            other = FixedPointNDArray(self.ctx, other)
+
+        res = FixedPointNDArray(self.ctx, asyncio.Future(),
+                                get_broadcast_shape(self.shape, other.shape))
+
+        def callback(_):
+            print("Add callback done")
+            res.data.set_result(np.array(self.data.result() + other.data.result()))
+
+        asyncio.gather(self.data, other.data).add_done_callback(callback)
+        return res
+
+    def __sub__(self, other):
+        if type(other) is not FixedPointNDArray:
+            other = FixedPointNDArray(self.ctx, other)
+
+        res = FixedPointNDArray(self.ctx, asyncio.Future(),
+                                get_broadcast_shape(self.shape, other.shape))
+
+        def callback(_):
+            print("Add callback done")
+            res.data.set_result(np.array(self.data.result() - other.data.result()))
+
+        asyncio.gather(self.data, other.data).add_done_callback(callback)
+        return res
+
+    def __mul__(self, other):
+        if type(other) is not FixedPointNDArray:
+            other = FixedPointNDArray(self.ctx, other)
+
+        res = FixedPointNDArray(self.ctx, asyncio.Future(),
+                                get_broadcast_shape(self.shape, other.shape))
+
+        def reduce_callback(_):
+            raw_result = self.data.result() * other.data.result()
+            fut = asyncio.ensure_future(reduce_array(self.ctx,
+                                                     raw_result.flatten().tolist()))
+            fut.add_done_callback(trunc_callback)
+
+        def trunc_callback(val):
+            fut = asyncio.ensure_future(trunc_pr_array(self.ctx, val.result(),
+                                                       2 * K, F))
+            fut.add_done_callback(result_callback)
+
+        def result_callback(val):
+            res.data.set_result(np.array(val.result()).reshape(res.shape))
+
+        asyncio.gather(self.data, other.data).add_done_callback(reduce_callback)
+        return res
+
+    __rmul__ = __mul__
+
+    def __truediv__(self, other):
+        if type(other) is FixedPointNDArray:
+            raise ValueError("Not supported")
+
+        other = np.array(other)
+        if other.dtype not in [np.int64, np.float64]:
+            raise ValueError("Unsupported type")
+
+        return self * (1. / other)
+
+    def __matmul__(self, other):
+        if type(other) is not FixedPointNDArray:
+            other = FixedPointNDArray(self.ctx, other)
+
+        res = FixedPointNDArray(self.ctx, asyncio.Future(),
+                                self.shape[:-1] + other.shape[1:])
+
+        if not (1 <= len(self.shape) <= 2 and 1 <= len(other.shape) <= 2):
+            print("Invalid dimensions")
+            raise ValueError("Invalid dimensions")
+
+        if self.shape[-1] != other.shape[0]:
+            raise ValueError("Invalid dimensions for matmul")
+
+        def reduce_callback(_):
+            raw_result = self.data.result().dot(other.data.result())
+            fut = asyncio.ensure_future(reduce_array(self.ctx,
+                                                     raw_result.flatten().tolist()))
+            fut.add_done_callback(trunc_callback)
+
+        def trunc_callback(val):
+            fut = asyncio.ensure_future(trunc_pr_array(self.ctx, val.result(),
+                                                       2 * K, F))
+            fut.add_done_callback(result_callback)
+
+        def result_callback(val):
+            res.data.set_result(np.array(val.result()).reshape(res.shape))
+
+        asyncio.gather(self.data, other.data).add_done_callback(reduce_callback)
+        return res
+
+    def __neg__(self):
+        res = FixedPointNDArray(self.ctx, asyncio.Future(), self.shape)
+
+        def callback(_):
+            res.data.set_result(-self.data.result())
+
+        self.data.add_done_callback(callback)
+        return res
+
+    def transpose(self):
+        res = FixedPointNDArray(self.ctx, asyncio.Future(), self.shape[::-1])
+
+        def callback(_):
+            res.data.set_result(self.data.result().T)
+
+        self.data.add_done_callback(callback)
+        return res
+
+    def ltz(self):
+        res = FixedPointNDArray(self.ctx, asyncio.Future(), self.shape)
+
+        def trunc_callback(_):
+            print(_)
+            fut = asyncio.ensure_future(trunc_array(self.ctx,
+                                                    self.data.result().flatten(),
+                                                    K, K - 1))
+            fut.add_done_callback(result_callback)
+
+        def result_callback(val):
+            print(val)
+            res.data.set_result(-2 ** F * val.result().reshape(res.shape))
+
+        self.data.add_done_callback(trunc_callback)
+        return res
+
+    def __lt__(self, other):
+        if type(other) is not FixedPointNDArray:
+            other = FixedPointNDArray(self.ctx, other)
+
+        return (self - other).ltz()
+
+    def __gt__(self, other):
+        if type(other) is not FixedPointNDArray:
+            other = FixedPointNDArray(self.ctx, other)
+        return other.__lt__(self)
+
+    @property
+    def T(self):
+        return self.transpose()
+
+    def open(self):
+        res = asyncio.Future()
+
+        def data_callback(_):
+            fut = asyncio.ensure_future(open_array(self.ctx,
+                                                   self.data.result().flatten().tolist())
+                                        )
+            return fut.add_done_callback(opening_callback)
+
+        def opening_callback(reduced_array):
+            def convert(val):
+                x = val.value
+                if x >= 2 ** (K - 1):
+                    x = -(p - x)
+
+                return float(x) / 2 ** F
+
+            convert = np.vectorize(convert)
+            flattened_result = convert(np.array(reduced_array.result()))
+            return res.set_result(flattened_result.reshape(self.shape))
+
+        self.data.add_done_callback(data_callback)
+        return res
+
+
+def concatenate(ctx, arr, axis=0):
+    # Make copy
+    arr = list(arr)
+    assert len(arr) > 0
+
+    for i in range(len(arr)):
+        if type(arr[i]) is not FixedPointNDArray:
+            arr[i] = FixedPointNDArray(ctx, arr[i])
+
+    # Take first shape as base shape
+    sh = arr[0].shape[:axis] + arr[0].shape[axis + 1:]
+
+    if not all((arr[i].shape[:axis] + arr[i].shape[axis + 1:]) == sh
+               for i in range(len(arr))):
+        raise ValueError("Invalid shapes")
+    print([arr[i].shape for i in range(len(arr))])
+    new_axis_sum = sum(arr[i].shape[axis] for i in range(len(arr)))
+
+    res = FixedPointNDArray(ctx, asyncio.Future(),
+                            sh[:axis] + (new_axis_sum,) + sh[axis:])
+
+    def callback(_):
+        res.data.set_result(np.concatenate([arr[i].data.result()
+                                            for i in range(len(arr))],
+                                           axis=axis))
+
+    asyncio.gather(*[x.data for x in arr]).add_done_callback(callback)
+    return res
+
+
+def relu(x):
+    return (-x).ltz() * x
 
 
 async def linear_regression_mpc(ctx, X, y, m_current=0, b_current=0, epochs=1,
@@ -359,6 +974,42 @@ async def linear_regression_mpc2(ctx, X, y, epochs=1,
     return m_current, b_current
 
 
+async def linear_regression_mpc3(ctx, X, y, epochs=1, learning_rate=0.05):
+    X = concatenate(ctx, [X, np.ones(X.shape[0]).reshape(-1, 1)], axis=1)
+    theta = FixedPointNDArray(ctx,
+                              uniform_random(-1, 1, X.shape[1], seed=0).reshape(-1, 1))
+
+    N = X.shape[0]
+    learning_rate = learning_rate / N
+    for epoch in range(epochs):
+        dtheta = (X.T @ ((X @ theta) - y))
+        theta = theta - learning_rate * dtheta
+        print(f"EPOCH {epoch}", "theta: ", (await theta.open()).flatten())
+    return theta
+
+
+async def linear_regression_numpy(ctx, X, y, epochs=1, learning_rate=0.05):
+    X = np.concatenate([X, np.ones(X.shape[0]).reshape(-1, 1)], axis=1)
+    theta = np.zeros(X.shape[1]).reshape(-1, 1) + 0.5
+    theta = uniform_random(-1, 1, theta.shape, seed=0)
+
+    N = X.shape[0]
+    learning_rate = learning_rate / N
+    for epoch in range(epochs):
+        dtheta = (X.T @ ((X @ theta) - y))
+        theta = theta - learning_rate * dtheta
+        print(f"EPOCH {epoch}", "theta: ", theta.flatten())
+    return theta
+
+
+def uniform_random(low, high, shape, seed=0):
+    random_lock.acquire()
+    np.random.seed(seed)
+    res = np.random.uniform(low, high, size=shape)
+    random_lock.release()
+    return res
+
+
 async def test_multiplication(ctx):
     for i in range(100):
         random.seed(i)
@@ -373,29 +1024,49 @@ async def test_multiplication(ctx):
 
 
 async def _prog(ctx):
-    # a = SuperFixedPoint(ctx, 1.0)
-    # b = SuperFixedPoint(ctx, 2.0)
-    # c = SuperFixedPoint(ctx, 3.0)
-    # d = (a * b * c) / 3
-    # print(await d.open())
-    m, b = await linear_regression_mpc2(ctx,
-                                        [SuperFixedPoint(ctx, 1),
-                                         SuperFixedPoint(ctx, 2),
-                                         SuperFixedPoint(ctx, 3),
-                                         SuperFixedPoint(ctx, 4),
-                                         SuperFixedPoint(ctx, 5),
-                                         SuperFixedPoint(ctx, 6)],
-                                        [SuperFixedPoint(ctx, 2),
-                                         SuperFixedPoint(ctx, 3),
-                                         SuperFixedPoint(ctx, 4),
-                                         SuperFixedPoint(ctx, 5),
-                                         SuperFixedPoint(ctx, 6),
-                                         SuperFixedPoint(ctx, 7),
-                                         SuperFixedPoint(ctx, 8)],
-                                        learning_rate=0.05,
-                                        epochs=100)
-    # await test_multiplication(ctx)
-    # print(await m.open(), await b.open())
+    global ppe
+
+    # arr1 = [0, 1, 0]
+    # arr2 = [0, 1, 0]
+    #
+    def to_share_array(arr):
+        def _to_share(x):
+            return (ppe.get_zero(ctx) + ctx.field(x)).v
+
+        return np.vectorize(_to_share)(arr)
+
+    a = to_share_array([to_fixed_point_repr(1)])
+    b = to_share_array([to_fixed_point_repr(3.1234)])
+    c = await fpdiv(ctx, a, b, K, F)
+    c_opened = await open_array(ctx, c)
+    print(np.vectorize(from_fixed_point_repr)(c_opened, K, F))
+    # arr1 = np.c_[to_share_array([0, 1, 0, 1]), to_share_array([0, 1, 0, 0])]
+    # arr2 = np.c_[to_share_array([1, 0, 1, 0]), to_share_array([0, 1, 0, 0])]
+    # carry_bits = await get_carry_bits(ctx, arr1, arr2)
+    # print(await open_nd_array(ctx, carry_bits))
+
+    # await linear_regression_mpc2(ctx, [SuperFixedPoint(ctx, x) for x in range(1, 7)],
+    #                              [SuperFixedPoint(ctx, x) for x in range(2, 8)],
+    #                              epochs=1, learning_rate=0.05)
+
+    # # The function we want to find is 9x_1 + 4x_2 + 7x_3
+    # X = np.c_[uniform_random(0, 50, 1500, seed=0),
+    #           uniform_random(0, 50, 1500, seed=1),
+    #           uniform_random(0, 50, 1500, seed=2),
+    #           uniform_random(0, 50, 1500, seed=3)]
+    #
+    # # X = np.c_[np.arange(2, 18), np.arange(3, 19), np.arange(1, 17)]
+    # y = 9 * X[:, 0] + 4 * X[:, 1] + 7 * X[:, 2] + 12 * X[:, 3]
+
+    # theta = await linear_regression_numpy(ctx, X, y.reshape(-1, 1), epochs=10,
+    #                                       learning_rate=0.0005)
+    # theta = await linear_regression_mpc3(ctx, X, y.reshape(-1, 1), epochs=50,
+    #                                      learning_rate=0.0005)
+    # a = FixedPointNDArray(ctx, np.array([[1, 2], [3, 4]]))
+    # b = FixedPointNDArray(ctx, np.array([[1, 2], [3, 4]]))
+    # # c = a @ b
+    # c = concatenate(ctx, [a, b], axis=1)
+    # print(await c.open())
 
 
 if __name__ == "__main__":
@@ -406,13 +1077,13 @@ if __name__ == "__main__":
     logging.info("Generating zeros in sharedata/")
     ppe.generate_zeros(1000, n, t)
     logging.info("Generating random shares of bits in sharedata/")
-    ppe.generate_random_bits(10000, n, t)
+    ppe.generate_random_bits(1000, n, t)
     logging.info('Generating random shares in sharedata/')
-    ppe.generate_rands(10000, n, t)
+    ppe.generate_rands(1000, n, t)
     logging.info('Generating random shares of triples in sharedata/')
-    ppe.generate_triples(10000, n, t)
+    ppe.generate_triples(1000, n, t)
     logging.info("Generating random doubles in sharedata/")
-    ppe.generate_double_shares(10000, n, t)
+    ppe.generate_double_shares(1000, n, t)
 
     # logging.info('Generating random shares of bits in sharedata/')
     # ppe.generate_bits(1000, n, t)

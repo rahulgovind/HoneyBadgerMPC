@@ -30,6 +30,7 @@ class PreProcessedElements(object):
         self._triples = {}
         self._zeros = {}
         self._rands = {}
+        self._random_bits = {}
         self._one_minus_one_rands = {}
         self._double_shares = {}
 
@@ -163,11 +164,22 @@ class PreProcessedElements(object):
     def get_random_bit(self, ctx, t=None):
         t = t if t is not None else ctx.t
         key = (ctx.myid, ctx.N, t)
-        if key not in self._rands:
+        if key not in self._random_bits:
             file_suffix = f"_{ctx.N}_{t}-{ctx.myid}.share"
             file_path = f"{PreProcessingConstants.RANDOM_BIT_FILE_NAME_PREFIX}{file_suffix}"
-            self._rands[key] = iter(self._read_share_values_from_file(file_path))
-        return ctx.Share(next(self._rands[key]), t)
+            self._random_bits[key] = iter(self._read_share_values_from_file(file_path))
+        return ctx.Share(next(self._random_bits[key]), t)
+
+    def get_random_bits(self, ctx, n, t=None):
+        t = t if t is not None else ctx.t
+        key = (ctx.myid, ctx.N, t)
+        store = self._random_bits
+
+        if key not in store:
+            file_suffix = f"_{ctx.N}_{t}-{ctx.myid}.share"
+            file_path = f"{PreProcessingConstants.RANDOM_BIT_FILE_NAME_PREFIX}{file_suffix}"
+            store[key] = iter(self._read_share_values_from_file(file_path))
+        return [ctx.field(next(store[key])) for _ in range(n)]
 
     def get_one_minus_one_rand(self, ctx):
         file_suffix = f"_{ctx.N}_{ctx.t}-{ctx.myid}.share"
