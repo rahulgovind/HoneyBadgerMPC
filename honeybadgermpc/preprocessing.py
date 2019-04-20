@@ -46,7 +46,7 @@ class PreProcessedElements(object):
             next(lines), next(lines)
 
             # remaining lines: shared values
-            return [int(line) for line in lines] * 100
+            return [int(line) for line in lines] * 10000
 
     def _write_shares_to_file(self, f, degree, myid, shares):
         content = f"{self.field.modulus}\n{degree}\n{myid}\n"

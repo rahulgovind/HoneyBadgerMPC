@@ -9,6 +9,9 @@ from honeybadgermpc.field import GF, GFElement
 import random
 import numpy as np
 import threading
+from sklearn.model_selection import train_test_split
+import pandas as pd
+import gc
 
 ppe = None
 
@@ -200,7 +203,7 @@ async def binary_addition(ctx, x, y):
 
     res = x + y - 2 * c
     res[:, 1:] += c[:, :-1]
-    print("c: ", await open_nd_array(ctx, c))
+    # print("c: ", await open_nd_array(ctx, c))
     return res
 
 
@@ -263,9 +266,9 @@ async def get_carry_bits(ctx, a_bits, b_bits, low_carry_bit=1):
 
     # Append previous carry bit
     new_row_shape = (1,) + carry_bits.shape[1:]
-    print(carry_bits.shape,
-          np.array([ctx.field(low_carry_bit) for _ in range(m)]).reshape(
-              new_row_shape).shape)
+    # print(carry_bits.shape,
+    #       np.array([ctx.field(low_carry_bit) for _ in range(m)]).reshape(
+    #           new_row_shape).shape)
     carry_bits = np.r_[carry_bits,
                        np.array([ctx.field(low_carry_bit)
                                  for _ in range(m)]).reshape(new_row_shape)]
@@ -391,37 +394,9 @@ async def mod2m_array(ctx, arr, k, m):
     return a2
 
 
-async def mod_array(ctx, arr, k, x):
-    m = int(np.ceil(np.log2(x)))
-    assert k > m
-    assert arr.ndim == 1
-    batch_size = len(arr)
-
-    def field_mod_x(val):
-        return ctx.field(int(val) % x)
-
-    r1, r1_bits = await randoms2m(ctx, m, batch_size)
-    r1, r1_bits = np.array(r1), np.array(r1_bits)
-
-    r2, _ = await randoms2m(ctx, k + KAPPA - m, batch_size)
-    r2 = np.array(r2) * 2 ** m
-    c = await open_nd_array(ctx, arr + Field(2 ** (k - 1)) + x * r2 + r1)
-    c2 = np.vectorize(field_mod_x)(c)
-    print("c2: ", c2.shape, " r1_bits: ", r1_bits.shape)
-    v = ctx.field(1) - await bit_ltl_array(ctx, r1_bits,
-                                           np.array([ctx.field(x)
-                                                     for _ in range(len(arr))]))
-
-    u = await ltz_array(ctx, c2 - r1 + x * v, m)
-    a2 = c2 - r1 + x * (u + v)
-    print("u: ", await open_nd_array(ctx, u))
-    print("v: ", await open_nd_array(ctx, v))
-    return a2
-
-
 async def ltz_array(ctx, arr, k):
     assert arr.ndim == 1
-    print("ltz: ", await open_nd_array(ctx, arr))
+    # print("ltz: ", await open_nd_array(ctx, arr))
     return -(await trunc_array(ctx, arr, k, k - 1))
 
 
@@ -503,9 +478,9 @@ async def _approx_reciprocal(ctx, arr, k, f):
     c, v = await norm(ctx, arr, k, f)
     d = alpha - 2 * c  # 2^{-k} precision, ~k+1 bits used
     d_opened = await open_array(ctx, d)
-    print("d: ", np.vectorize(from_fixed_point_repr)(d_opened, K, K - 1, False))
+    # print("d: ", np.vectorize(from_fixed_point_repr)(d_opened, K, K - 1, False))
     v_opened = await open_array(ctx, v)
-    print("v: ", np.vectorize(from_fixed_point_repr)(v_opened, K, F))
+    # print("v: ", np.vectorize(from_fixed_point_repr)(v_opened, K, F))
     w = await reduce_nd_array(ctx, d * v)  # 2^{-k-f} precision. 2k+1 bits used
     w = await trunc_pr_nd_array(ctx, w, 2 * k + 1, k)
     return w
@@ -723,7 +698,7 @@ class FixedPointNDArray(object):
             self.data = asyncio.Future()
             x = np.array(x)
             if x.dtype not in [np.float64, np.int64]:
-                print("Dtype is ", x.dtype)
+                # print("Dtype is ", x.dtype)
                 raise NotImplementedError
 
             self.data.set_result(convert(x))
@@ -737,11 +712,13 @@ class FixedPointNDArray(object):
                                 get_broadcast_shape(self.shape, other.shape))
 
         def callback(_):
-            print("Add callback done")
+            # print("Add callback done")
             res.data.set_result(np.array(self.data.result() + other.data.result()))
 
         asyncio.gather(self.data, other.data).add_done_callback(callback)
         return res
+
+    __radd__ = __add__
 
     def __sub__(self, other):
         if type(other) is not FixedPointNDArray:
@@ -751,11 +728,14 @@ class FixedPointNDArray(object):
                                 get_broadcast_shape(self.shape, other.shape))
 
         def callback(_):
-            print("Add callback done")
+            # print("Add callback done")
             res.data.set_result(np.array(self.data.result() - other.data.result()))
 
         asyncio.gather(self.data, other.data).add_done_callback(callback)
         return res
+
+    def __rsub__(self, other):
+        return -self.__sub__(other)
 
     def __mul__(self, other):
         if type(other) is not FixedPointNDArray:
@@ -801,24 +781,27 @@ class FixedPointNDArray(object):
                                 self.shape[:-1] + other.shape[1:])
 
         if not (1 <= len(self.shape) <= 2 and 1 <= len(other.shape) <= 2):
-            print("Invalid dimensions")
+            # print("Invalid dimensions")
             raise ValueError("Invalid dimensions")
 
         if self.shape[-1] != other.shape[0]:
             raise ValueError("Invalid dimensions for matmul")
 
-        def reduce_callback(_):
+        def reduce_callback(v):
+            # print("reduce_callback", v)
             raw_result = self.data.result().dot(other.data.result())
             fut = asyncio.ensure_future(reduce_array(self.ctx,
                                                      raw_result.flatten().tolist()))
             fut.add_done_callback(trunc_callback)
 
         def trunc_callback(val):
+            # print("turnc_callback", val)
             fut = asyncio.ensure_future(trunc_pr_array(self.ctx, val.result(),
                                                        2 * K, F))
             fut.add_done_callback(result_callback)
 
         def result_callback(val):
+            # print("result_callback", val)
             res.data.set_result(np.array(val.result()).reshape(res.shape))
 
         asyncio.gather(self.data, other.data).add_done_callback(reduce_callback)
@@ -846,14 +829,14 @@ class FixedPointNDArray(object):
         res = FixedPointNDArray(self.ctx, asyncio.Future(), self.shape)
 
         def trunc_callback(_):
-            print(_)
+            # print(_)
             fut = asyncio.ensure_future(trunc_array(self.ctx,
                                                     self.data.result().flatten(),
                                                     K, K - 1))
             fut.add_done_callback(result_callback)
 
         def result_callback(val):
-            print(val)
+            # print(val)
             res.data.set_result(-2 ** F * val.result().reshape(res.shape))
 
         self.data.add_done_callback(trunc_callback)
@@ -898,6 +881,9 @@ class FixedPointNDArray(object):
         self.data.add_done_callback(data_callback)
         return res
 
+    async def resolve(self):
+        await self.data
+
 
 def concatenate(ctx, arr, axis=0):
     # Make copy
@@ -914,7 +900,7 @@ def concatenate(ctx, arr, axis=0):
     if not all((arr[i].shape[:axis] + arr[i].shape[axis + 1:]) == sh
                for i in range(len(arr))):
         raise ValueError("Invalid shapes")
-    print([arr[i].shape for i in range(len(arr))])
+    # print([arr[i].shape for i in range(len(arr))])
     new_axis_sum = sum(arr[i].shape[axis] for i in range(len(arr)))
 
     res = FixedPointNDArray(ctx, asyncio.Future(),
@@ -929,52 +915,60 @@ def concatenate(ctx, arr, axis=0):
     return res
 
 
+def uniform_random(low, high, shape, seed=0):
+    """
+    :param low: Lower boundary of interval
+    :param high: Upper boundary of interval
+    :param shape: Output shape
+    :param seed: Random seed
+    :return:
+    """
+    # Lock is required if multiple threads are being used
+    # This ensures that the random numbers generated by each thread
+    # are the same for the same seed
+    random_lock.acquire()
+    np.random.seed(seed)
+    res = np.random.uniform(low, high, size=shape)
+    random_lock.release()
+    return res
+
+
+def sigmoid(x):
+    """
+    :type x: array-like
+    :return: approximate sigmoid of x
+
+    An approximation of the sigmoid function is found using the expansion
+    y = 1/2 + x / 4 - x ^ 3 / 48 + x ^ 5 / 480
+
+    We then cap this to be 0 if x < -2 and 1 if x > 2, since the expansion is not
+    very accurate after this point
+    """
+    less = (x > -2)
+    gt = (x < 2)
+
+    x2 = x * x
+    x3 = x * x2
+    x5 = x3 * x2
+    return (0.5 + 0.25 * x - x3 / 48 + x5 / 480) * less * gt + (1 - gt)
+
+
+def sigmoid_deriv(y):
+    """
+    :param y: sigma(x)
+    :return: sigma'(x)
+    """
+    return y * (1 - y)
+
+
 def relu(x):
+    """
+    relu(x) = max(0, x)
+    """
     return (-x).ltz() * x
 
 
-async def linear_regression_mpc(ctx, X, y, m_current=0, b_current=0, epochs=1,
-                                learning_rate=0.01):
-    N = len(X)
-    m_current = FixedPoint(ctx, m_current)
-    b_current = FixedPoint(ctx, b_current)
-    learning_rate = FixedPoint(ctx, learning_rate)
-    for i in range(epochs):
-        y_current = [((await m_current.mul(X[i]))).add(b_current) for i in range(N)]
-        m_gradient = FixedPoint(ctx, 0)
-        for i in range(N):
-            m_gradient = m_gradient.sub(await y[i].sub(y_current[i]).mul(X[i]))
-        m_gradient = await m_gradient.div(N)
-        print("m_gradient: ", await m_gradient.open())
-        b_gradient = FixedPoint(ctx, 0)
-        for i in range(N):
-            b_gradient = b_gradient.add(y[i].sub(y_current[i]))
-        b_gradient = (await b_gradient.div(N)).neg()
-        print("b_gradient: ", await b_gradient.open())
-        m_current = m_current.sub(await (learning_rate.mul(m_gradient)))
-        b_current = b_current.sub(await (learning_rate.mul(b_gradient)))
-        print("m_current: ", await m_current.open(), "b_current: ",
-              await b_current.open())
-    return m_current, b_current
-
-
-async def linear_regression_mpc2(ctx, X, y, epochs=1,
-                                 learning_rate=0.01):
-    N = len(X)
-    m_current = SuperFixedPoint(ctx, 0)
-    b_current = SuperFixedPoint(ctx, 0)
-    for epoch in range(epochs):
-        y_current = [(m_current * x + b_current) for x in X]
-        m_gradient = -(sum((y[i] - y_current[i]) * X[i] for i in range(N))) / N
-        b_gradient = -(sum((y[i] - y_current[i]) for i in range(N))) / N
-        m_current = m_current - learning_rate * m_gradient
-        b_current = b_current - learning_rate * b_gradient
-        print(f"EPOCH {epoch}", "m_current: ", await m_current.open(), "b_current: ",
-              await b_current.open())
-    return m_current, b_current
-
-
-async def linear_regression_mpc3(ctx, X, y, epochs=1, learning_rate=0.05):
+async def linear_regression_mpc(ctx, X, y, epochs=1, learning_rate=0.05):
     X = concatenate(ctx, [X, np.ones(X.shape[0]).reshape(-1, 1)], axis=1)
     theta = FixedPointNDArray(ctx,
                               uniform_random(-1, 1, X.shape[1], seed=0).reshape(-1, 1))
@@ -984,6 +978,8 @@ async def linear_regression_mpc3(ctx, X, y, epochs=1, learning_rate=0.05):
     for epoch in range(epochs):
         dtheta = (X.T @ ((X @ theta) - y))
         theta = theta - learning_rate * dtheta
+        err = X @ theta - y
+        print("Error: ", np.linalg.norm(await err.open()))
         print(f"EPOCH {epoch}", "theta: ", (await theta.open()).flatten())
     return theta
 
@@ -1002,71 +998,89 @@ async def linear_regression_numpy(ctx, X, y, epochs=1, learning_rate=0.05):
     return theta
 
 
-def uniform_random(low, high, shape, seed=0):
-    random_lock.acquire()
-    np.random.seed(seed)
-    res = np.random.uniform(low, high, size=shape)
-    random_lock.release()
-    return res
+class NeuralNetwork(object):
+    def __init__(self, hidden_size, learning_rate, epochs):
+        self.hidden_size = hidden_size
+        self.learning_rate = learning_rate
+        self.epochs = epochs
+
+    async def fit(self, ctx, X, y):
+        self.input_size = X.shape[1]
+        self.output_size = y.shape[0]
+
+        self.w1 = FixedPointNDArray(ctx, uniform_random(0, 1, (self.input_size,
+                                                               self.hidden_size),
+                                                        seed=0))
+        self.w2 = FixedPointNDArray(ctx, uniform_random(0, 1,
+                                                        (self.hidden_size, 1),
+                                                        seed=1))
+
+        for epoch in range(self.epochs):
+            # Forward
+            print(f"-------------- Starting epoch {epoch} ------------------")
+            print(f"-------------- Evaluating input layer ------------------")
+            y1 = X @ self.w1
+            # print("y1 done")
+            l1 = sigmoid(y1)
+            await l1.resolve()
+            gc.collect()
+
+            print(f"-------------- Evaluating hidden layer -----------------")
+            y2 = l1 @ self.w2
+            l2 = sigmoid(y2)
+
+            await l2.resolve()
+            gc.collect()
+
+            print(f"--------------- Starting error evaluation --------------")
+            #             print("l2: ", l2)
+
+            err = y - l2
+            print("Error: ", np.linalg.norm(await err.open()))
+
+            print(f"--------------- Starting back-propagation ---------------")
+            l2_delta = err * sigmoid_deriv(l2)
+            l1_delta = (l2_delta @ self.w2.T) * sigmoid_deriv(l1)
+            await l1_delta.open()
+            gc.collect()
+
+            self.w2 = self.w2 + (l1.T @ l2_delta) * self.learning_rate
+            self.w1 = self.w1 + (X.T @ l1_delta) * self.learning_rate
+            await self.w1.resolve()
+            await self.w2.resolve()
+            print(f"--------------- Back-propagation complete ---------------")
+
+            gc.collect()
+
+    def evaluate(self, x):
+        l1 = sigmoid(x @ self.w1)
+        l2 = sigmoid(l1 @ self.w2)
+        return (l2 > 0.5)
 
 
-async def test_multiplication(ctx):
-    for i in range(100):
-        random.seed(i)
-        print("Multiplication ", i)
-        x = (random.random() - 0.5) * 100
-        y = (random.random() - 0.5) * 100
-        z = x * y
-        print(x, y, z)
-        z2 = await (await FixedPoint(ctx, x).mul(FixedPoint(ctx, y))).open()
-        print(abs(z - z2))
-        assert abs(z - z2) < 1e-6
+def accuracy(y_pred, y_actual):
+    return np.sum(y_pred.reshape(-1, 1) == y_actual.reshape(-1, 1)) / len(y_actual)
 
 
-async def _prog(ctx):
-    global ppe
+async def _neural_network_mpc_program(ctx, x_train, y_train, x_test, y_test):
+    # Currently, normalization is done in a non-MPC fashion. However, this shouldn't be
+    # the case since normalization is a global operation.
+    nn = NeuralNetwork(10, 0.2, 2)
+    x_train = FixedPointNDArray(ctx, x_train)
+    y_train = FixedPointNDArray(ctx, y_train.reshape(-1, 1))
+    await nn.fit(ctx, x_train, y_train)
+    x_test = FixedPointNDArray(ctx, x_test)
+    print("Accuracy: ", accuracy((await (nn.evaluate(x_test)).open()), y_test))
 
-    # arr1 = [0, 1, 0]
-    # arr2 = [0, 1, 0]
-    #
-    def to_share_array(arr):
-        def _to_share(x):
-            return (ppe.get_zero(ctx) + ctx.field(x)).v
 
-        return np.vectorize(_to_share)(arr)
-
-    a = to_share_array([to_fixed_point_repr(1)])
-    b = to_share_array([to_fixed_point_repr(3.1234)])
-    c = await fpdiv(ctx, a, b, K, F)
-    c_opened = await open_array(ctx, c)
-    print(np.vectorize(from_fixed_point_repr)(c_opened, K, F))
-    # arr1 = np.c_[to_share_array([0, 1, 0, 1]), to_share_array([0, 1, 0, 0])]
-    # arr2 = np.c_[to_share_array([1, 0, 1, 0]), to_share_array([0, 1, 0, 0])]
-    # carry_bits = await get_carry_bits(ctx, arr1, arr2)
-    # print(await open_nd_array(ctx, carry_bits))
-
-    # await linear_regression_mpc2(ctx, [SuperFixedPoint(ctx, x) for x in range(1, 7)],
-    #                              [SuperFixedPoint(ctx, x) for x in range(2, 8)],
-    #                              epochs=1, learning_rate=0.05)
-
-    # # The function we want to find is 9x_1 + 4x_2 + 7x_3
-    # X = np.c_[uniform_random(0, 50, 1500, seed=0),
-    #           uniform_random(0, 50, 1500, seed=1),
-    #           uniform_random(0, 50, 1500, seed=2),
-    #           uniform_random(0, 50, 1500, seed=3)]
-    #
-    # # X = np.c_[np.arange(2, 18), np.arange(3, 19), np.arange(1, 17)]
-    # y = 9 * X[:, 0] + 4 * X[:, 1] + 7 * X[:, 2] + 12 * X[:, 3]
-
-    # theta = await linear_regression_numpy(ctx, X, y.reshape(-1, 1), epochs=10,
-    #                                       learning_rate=0.0005)
-    # theta = await linear_regression_mpc3(ctx, X, y.reshape(-1, 1), epochs=50,
-    #                                      learning_rate=0.0005)
-    # a = FixedPointNDArray(ctx, np.array([[1, 2], [3, 4]]))
-    # b = FixedPointNDArray(ctx, np.array([[1, 2], [3, 4]]))
-    # # c = a @ b
-    # c = concatenate(ctx, [a, b], axis=1)
-    # print(await c.open())
+async def _linear_regression_mpc_program(ctx, X, y):
+    """
+    Given data y = 9 * x_ 1 + 4 * x_2 + 7 * x_3 + 2
+    Find the coefficients of the best fit line
+    Should be (9, 4, 7, 2)
+    """
+    theta = await linear_regression_mpc(ctx, X, y.reshape(-1, 1), epochs=50,
+                                        learning_rate=0.05)
 
 
 if __name__ == "__main__":
@@ -1104,7 +1118,7 @@ if __name__ == "__main__":
                 await program_runner.start()
                 # send, recv = program_runner.get_send_and_recv(0)
 
-                program_runner.add(1, _prog)
+                program_runner.add(1, _neural_network_mpc_program)
                 await program_runner.join()
                 await program_runner.close()
 
@@ -1114,7 +1128,25 @@ if __name__ == "__main__":
                 HbmpcConfig.my_id))
         else:
             program_runner = TaskProgramRunner(n, t, config)
-            program_runner.add(_prog)
+            df = pd.read_csv('data.csv')
+            del df['Unnamed: 32']
+
+            X = df.iloc[:, 2:].values
+            y = np.vectorize(lambda x: 1 if x == 'M' else 0)(df.iloc[:, 1].values)
+            x_train, x_test, y_train, y_test = train_test_split(X, y, test_size=0.3,
+                                                                random_state=0)
+
+            # Normalize values
+            x_train = (x_train - np.mean(x_train, axis=0)) / np.std(x_train, axis=0)
+            x_test = (x_test - np.mean(x_test, axis=0)) / np.std(x_test, axis=0)
+
+            program_runner.add(_neural_network_mpc_program,
+                               x_train=x_train[:32], y_train=y_train[:32],
+                               x_test=x_test[:32], y_test=y_test[:32])
+            # X = np.random.uniform(0, 10, (15, 3))
+            # y = 9 * X[:, 0] + 4 * X[:, 1] + 7 * X[:, 2] + 2
+            # X = (X - np.mean(X, axis=0)) / np.std(X, axis=0)
+            # program_runner.add(_linear_regression_mpc_program, X=X, y=y)
             loop.run_until_complete(program_runner.join())
     finally:
         loop.close()
