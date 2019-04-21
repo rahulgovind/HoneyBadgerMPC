@@ -477,17 +477,13 @@ async def _approx_reciprocal(ctx, arr, k, f):
     alpha = to_fixed_point_repr(2.9142, k)  # 2^{-k} precision, ~k+2 bits used
     c, v = await norm(ctx, arr, k, f)
     d = alpha - 2 * c  # 2^{-k} precision, ~k+1 bits used
-    d_opened = await open_array(ctx, d)
-    # print("d: ", np.vectorize(from_fixed_point_repr)(d_opened, K, K - 1, False))
-    v_opened = await open_array(ctx, v)
-    # print("v: ", np.vectorize(from_fixed_point_repr)(v_opened, K, F))
     w = await reduce_nd_array(ctx, d * v)  # 2^{-k-f} precision. 2k+1 bits used
     w = await trunc_pr_nd_array(ctx, w, 2 * k + 1, k)
     return w
 
 
 async def fpdiv(ctx, a, b, k, f):
-    theta = int(np.ceil(np.log(k / 3.5)))
+    theta = int(np.ceil(np.log2(k / 3.5)))
     alpha = ctx.field(to_fixed_point_repr(1, 2 * f))
     w = await _approx_reciprocal(ctx, b, k, f)
     x = alpha - (await reduce_nd_array(ctx, b * w))
@@ -501,6 +497,49 @@ async def fpdiv(ctx, a, b, k, f):
     y = await reduce_nd_array(ctx, y * (alpha + x))
     y = await trunc_pr_nd_array(ctx, y, 2 * k, 2 * f)
     return y
+
+
+async def reciprocal(ctx, arr, k, f):
+    """
+    Combination of
+    - https://en.wikipedia.org/wiki/Division_algorithm#Pseudocode
+    - Secure Computation With Fixed-Point Numbers
+    """
+    assert arr.ndim == 1
+    f2 = f
+    theta = int(np.ceil(np.log2(k / 4.087)))
+
+    arr_normalized_k, v = await norm(ctx, arr, k, f)
+    arr_normalized = await trunc_pr_nd_array(ctx, arr_normalized_k, k, k - f2)
+
+    # 1's representation in Q_{., 2f}
+    one_2f = ctx.field(to_fixed_point_repr(1, 2 * f2))
+
+    # Initial approximation: x0 = 48 / 17 - 32 / 17 * d
+    x = ctx.field(to_fixed_point_repr(48 / 17, 2 * f2)) - \
+        ctx.field(to_fixed_point_repr(32 / 17, f2)) * arr_normalized
+
+    x = await trunc_pr_nd_array(ctx, x, 2 * k, f2)
+
+    print("Theta: ", theta)
+    for _ in range(theta):
+        dx = await reduce_nd_array(ctx, (one_2f - arr_normalized * x))
+        dx = await trunc_pr_nd_array(ctx, dx, 2 * k, f2)
+        dx = await reduce_nd_array(ctx, x * dx)
+        dx = await trunc_pr_nd_array(ctx, dx, 2 * k, f2)
+        x = x + dx
+    res = await reduce_nd_array(ctx, x * v)
+    return await trunc_pr_nd_array(ctx, res, 2 * k, f2)
+
+
+async def approx_sqrt(ctx, x, k, f):
+    assert x.ndim == 1
+    x_bits = await to_bits(ctx, x, k, k)
+    sqrt2_powers = np.array([2.0 ** ((i - f) / 2) for i in range(x_bits.shape[1])])
+    sqrt2_powers = np.vectorize(to_fixed_point_repr)(sqrt2_powers, f)
+    sqrt2_powers = sqrt2_powers.reshape(1, -1)
+
+    return np.sum(x_bits * sqrt2_powers, axis=1)
 
 
 class FixedPoint(object):
@@ -642,7 +681,7 @@ class SuperFixedPoint(object):
             fut.add_done_callback(result_callback)
 
         def result_callback(val):
-            res.data.set_result(val.result())
+            res.data.set_result(np.array(val.result()))
 
         asyncio.gather(self.data, other.data).add_done_callback(reduce_callback)
         return res
@@ -745,7 +784,7 @@ class FixedPointNDArray(object):
                                 get_broadcast_shape(self.shape, other.shape))
 
         def reduce_callback(_):
-            raw_result = self.data.result() * other.data.result()
+            raw_result = np.array(self.data.result() * other.data.result())
             fut = asyncio.ensure_future(reduce_array(self.ctx,
                                                      raw_result.flatten().tolist()))
             fut.add_done_callback(trunc_callback)
@@ -762,16 +801,6 @@ class FixedPointNDArray(object):
         return res
 
     __rmul__ = __mul__
-
-    def __truediv__(self, other):
-        if type(other) is FixedPointNDArray:
-            raise ValueError("Not supported")
-
-        other = np.array(other)
-        if other.dtype not in [np.int64, np.float64]:
-            raise ValueError("Unsupported type")
-
-        return self * (1. / other)
 
     def __matmul__(self, other):
         if type(other) is not FixedPointNDArray:
@@ -853,6 +882,32 @@ class FixedPointNDArray(object):
             other = FixedPointNDArray(self.ctx, other)
         return other.__lt__(self)
 
+    def _reciprocal(self):
+        res = FixedPointNDArray(self.ctx, asyncio.Future(), self.shape)
+
+        def reciprocal_callback(_):
+            # Time to evaluate reciprocal!
+            print(_)
+            inv = asyncio.ensure_future(reciprocal(self.ctx,
+                                                   self.data.result().flatten(),
+                                                   K, F))
+            inv.add_done_callback(set_data_callback)
+
+        def set_data_callback(x):
+            res.data.set_result(x.result().reshape(res.shape))
+
+        self.data.add_done_callback(reciprocal_callback)
+        return res
+
+    def __truediv__(self, other):
+        if type(other) is FixedPointNDArray:
+            other_inv = other._reciprocal()
+        else:
+            other = np.array(other)
+            assert other.dtype in [np.float64, np.int64]
+            other_inv = FixedPointNDArray(self.ctx, 1.0 / other)
+        return self * other_inv
+
     @property
     def T(self):
         return self.transpose()
@@ -883,6 +938,81 @@ class FixedPointNDArray(object):
 
     async def resolve(self):
         await self.data
+
+    def sqrt(self, theta=3):
+        res = FixedPointNDArray(self.ctx, asyncio.Future(), self.shape)
+
+        def approx_sqrt_callback(_):
+            fut = asyncio.ensure_future(approx_sqrt(self.ctx,
+                                                    self.data.result().flatten(),
+                                                    K, F))
+            fut.add_done_callback(iterative_set_callback)
+
+        def iterative_set_callback(x0_data):
+            x = FixedPointNDArray(self.ctx, asyncio.Future(), self.shape)
+            x.data.set_result(x0_data.result().reshape(self.shape))
+
+            for i in range(theta):
+                try:
+                    x = 0.5 * (x + self / x)
+                except Exception as e:
+                    print(e)
+            x.data.add_done_callback(set_data_callback)
+
+        def set_data_callback(x):
+            res.data.set_result(x.result())
+
+        self.data.add_done_callback(approx_sqrt_callback)
+        return res
+
+    def variance(self, axis=None):
+        pass
+
+    @property
+    def size(self):
+        res = 1
+        for s in self.shape:
+            res *= s
+        return res
+
+    def sum(self, axis=None):
+        if axis is None:
+            new_shape = tuple()
+        else:
+            new_shape = self.shape[:axis] + self.shape[axis + 1:]
+
+        res = FixedPointNDArray(self.ctx, asyncio.Future(), new_shape)
+
+        def sum_callback(_):
+            res.data.set_result(np.array(np.sum(self.data.result(), axis=axis)))
+
+        self.data.add_done_callback(sum_callback)
+        return res
+
+    def mean(self, axis=None):
+        sum = self.sum(axis=axis)
+        if axis is None:
+            return sum / self.size
+        else:
+            return sum / self.shape[axis]
+
+    def reshape(self, new_shape):
+        res = FixedPointNDArray(self.ctx, asyncio.Future(), new_shape)
+
+        def reshape_callback(_):
+            res.data.set_result(self.data.result().reshape(new_shape))
+
+        self.data.add_done_callback(reshape_callback)
+        return res
+
+    def var(self, axis=None):
+        if axis is None:
+            diff = (self - self.mean())
+            return (diff * diff).mean()
+        else:
+            broadcast_shape = self.shape[:axis] + (1,) + self.shape[axis + 1:]
+            diff = (self - self.mean(axis=axis).reshape(broadcast_shape))
+            return (diff * diff).mean(axis=axis)
 
 
 def concatenate(ctx, arr, axis=0):
@@ -1083,6 +1213,23 @@ async def _linear_regression_mpc_program(ctx, X, y):
                                         learning_rate=0.05)
 
 
+async def _prog(ctx):
+    # Testing spot
+    def to_share(x):
+        return ctx.field(to_fixed_point_repr(x))
+
+    print("Starting _prog")
+    # a = np.vectorize(to_share)([5.0])
+    # b = await approx_sqrt(ctx, a, K, F)
+    # b_opened = await open_nd_array(ctx, b)
+    # print(np.vectorize(from_fixed_point_repr)(b_opened))
+    a = FixedPointNDArray(ctx, np.array([[4.0, 4.0], [1.0, 3.0]]))
+    # b = a - a.mean(axis=1).reshape((2, 1))
+    b = a.var(axis=1)
+    print(await b.open())
+    # print(await b.open())
+
+
 if __name__ == "__main__":
     n = 5
     t = 1
@@ -1128,6 +1275,7 @@ if __name__ == "__main__":
                 HbmpcConfig.my_id))
         else:
             program_runner = TaskProgramRunner(n, t, config)
+
             df = pd.read_csv('data.csv')
             del df['Unnamed: 32']
 
@@ -1147,6 +1295,7 @@ if __name__ == "__main__":
             # y = 9 * X[:, 0] + 4 * X[:, 1] + 7 * X[:, 2] + 2
             # X = (X - np.mean(X, axis=0)) / np.std(X, axis=0)
             # program_runner.add(_linear_regression_mpc_program, X=X, y=y)
+            # program_runner.add(_prog)
             loop.run_until_complete(program_runner.join())
     finally:
         loop.close()
