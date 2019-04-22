@@ -258,7 +258,9 @@ async def get_carry_bits(ctx, a_bits, b_bits, low_carry_bit=1):
     a_bits = a_bits[::-1]
     b_bits = b_bits[::-1]
 
-    carry_bits = np.array(await reduce_nd_array(ctx, a_bits * b_bits))
+    # carry_bits = np.array(await reduce_nd_array(ctx, a_bits * b_bits))
+    carry_bits = a_bits * b_bits
+    # Reduction not necessary since either a_bits or b_bits were public
     all_one_bits = a_bits + b_bits - 2 * carry_bits
 
     # Effectively batch size
@@ -266,9 +268,7 @@ async def get_carry_bits(ctx, a_bits, b_bits, low_carry_bit=1):
 
     # Append previous carry bit
     new_row_shape = (1,) + carry_bits.shape[1:]
-    # print(carry_bits.shape,
-    #       np.array([ctx.field(low_carry_bit) for _ in range(m)]).reshape(
-    #           new_row_shape).shape)
+
     carry_bits = np.r_[carry_bits,
                        np.array([ctx.field(low_carry_bit)
                                  for _ in range(m)]).reshape(new_row_shape)]
@@ -278,6 +278,7 @@ async def get_carry_bits(ctx, a_bits, b_bits, low_carry_bit=1):
 
     # Pad to make number of bits a power of 2
     n = len(carry_bits)
+
     if n & (n - 1) != 0:
         new_n = 2 ** n.bit_length()
         carry_bits = np.r_[carry_bits,
@@ -287,15 +288,23 @@ async def get_carry_bits(ctx, a_bits, b_bits, low_carry_bit=1):
                              np.array([[ctx.field(0) for _ in range(m)]
                                        for _ in range(new_n - n)])]
 
+    iter = 0
     while carry_bits.shape[0] > 1:
-        # print("carry_bits.shape: ", carry_bits.shape)
+        start_time = time.time()
         temp1 = all_one_bits[0::2] * carry_bits[1::2]
-        temp1 = await reduce_nd_array(ctx, temp1)
         temp1 = temp1 + carry_bits[0::2]
+        # Based on the observation that the [0::2] values can be used as 2t-shares
+        # in the next iteration
+        if temp1.shape[0] > 1:
+            temp1[1::2] = await reduce_nd_array(ctx, temp1[1::2])
 
         temp2 = all_one_bits[0::2] * all_one_bits[1::2]
         temp2 = await reduce_nd_array(ctx, temp2)
         carry_bits, all_one_bits = temp1, temp2
+        end_time = time.time()
+        print(f"get_carry_bits: Iteration {iter} took {end_time - start_time}s")
+        iter += 1
+    carry_bits = await reduce_nd_array(ctx, carry_bits)
     return carry_bits.flatten()
 
 
@@ -339,6 +348,7 @@ async def bit_ltl2(ctx, a, b_bits):
 
 
 async def bit_ltl_array(ctx, a, b):
+    start_time = time.time()
     assert (a.ndim == 1 and b.ndim == 2) or (a.ndim == 2 and b.ndim == 1)
     assert a.shape[0] == b.shape[0]
 
@@ -358,6 +368,8 @@ async def bit_ltl_array(ctx, a, b):
     b_bits = np.vectorize(ones_complement)(b_bits)
 
     carry_bits = await get_carry_bits(ctx, a_bits.T, b_bits.T)
+    end_time = time.time()
+    print(f"bit_ltl_array took {end_time - start_time}s")
     return np.array(ctx.field(1)) - carry_bits
 
 
@@ -1146,17 +1158,28 @@ class NeuralNetwork(object):
                                                         seed=1))
 
         for epoch in range(self.epochs):
+            start_time = time.time()
             # Forward
             print(f"-------------- Starting epoch {epoch} ------------------")
             print(f"-------------- Evaluating input layer ------------------")
+            start_time2 = time.time()
             y1 = X @ self.w1
             # print("y1 done")
+            await y1.resolve()
+            end_time2 = time.time()
+            print(f"First layer linear operations took {end_time2 - start_time2}s")
+
+            start_time2 = time.time()
             l1 = sigmoid(y1)
             await l1.resolve()
+            end_time2 = time.time()
+            print(f"First layer non-linear ops took {end_time2 - start_time2}s")
             gc.collect()
 
             print(f"-------------- Evaluating hidden layer -----------------")
             y2 = l1 @ self.w2
+            await y2.resolve()
+
             l2 = sigmoid(y2)
 
             await l2.resolve()
@@ -1181,6 +1204,8 @@ class NeuralNetwork(object):
             print(f"--------------- Back-propagation complete ---------------")
 
             gc.collect()
+            end_time = time.time()
+            print(f"Epoch took {end_time - start_time}")
 
     def evaluate(self, x):
         l1 = sigmoid(x @ self.w1)
@@ -1223,10 +1248,15 @@ async def _prog(ctx):
     # b = await approx_sqrt(ctx, a, K, F)
     # b_opened = await open_nd_array(ctx, b)
     # print(np.vectorize(from_fixed_point_repr)(b_opened))
-    a = FixedPointNDArray(ctx, np.array([[4.0, 4.0], [1.0, 3.0]]))
+    a = np.vectorize(to_share)([0.1, -0.1]) + 2 ** (K - 5)
+
+    # a = FixedPointNDArray(ctx, np.array([[4.0, 4.0], [1.0, 3.0]]))
     # b = a - a.mean(axis=1).reshape((2, 1))
-    b = a.var(axis=1)
-    print(await b.open())
+    # b = a.var(axis=1)
+    b = (await trunc_pr_nd_array(ctx, a, K, K - 3)) * 2 ** (K - 3)
+    b_opened = await open_nd_array(ctx, b)
+    print(np.vectorize(from_fixed_point_repr)(b_opened))
+    # print(await b.open())
     # print(await b.open())
 
 
@@ -1276,26 +1306,26 @@ if __name__ == "__main__":
         else:
             program_runner = TaskProgramRunner(n, t, config)
 
-            df = pd.read_csv('data.csv')
-            del df['Unnamed: 32']
-
-            X = df.iloc[:, 2:].values
-            y = np.vectorize(lambda x: 1 if x == 'M' else 0)(df.iloc[:, 1].values)
-            x_train, x_test, y_train, y_test = train_test_split(X, y, test_size=0.3,
-                                                                random_state=0)
-
-            # Normalize values
-            x_train = (x_train - np.mean(x_train, axis=0)) / np.std(x_train, axis=0)
-            x_test = (x_test - np.mean(x_test, axis=0)) / np.std(x_test, axis=0)
-
-            program_runner.add(_neural_network_mpc_program,
-                               x_train=x_train[:32], y_train=y_train[:32],
-                               x_test=x_test[:32], y_test=y_test[:32])
+            # df = pd.read_csv('data.csv')
+            # del df['Unnamed: 32']
+            #
+            # X = df.iloc[:, 2:].values
+            # y = np.vectorize(lambda x: 1 if x == 'M' else 0)(df.iloc[:, 1].values)
+            # x_train, x_test, y_train, y_test = train_test_split(X, y, test_size=0.3,
+            #                                                     random_state=0)
+            #
+            # # Normalize values
+            # x_train = (x_train - np.mean(x_train, axis=0)) / np.std(x_train, axis=0)
+            # x_test = (x_test - np.mean(x_test, axis=0)) / np.std(x_test, axis=0)
+            #
+            # program_runner.add(_neural_network_mpc_program,
+            #                    x_train=x_train[:32], y_train=y_train[:32],
+            #                    x_test=x_test[:32], y_test=y_test[:32])
             # X = np.random.uniform(0, 10, (15, 3))
             # y = 9 * X[:, 0] + 4 * X[:, 1] + 7 * X[:, 2] + 2
             # X = (X - np.mean(X, axis=0)) / np.std(X, axis=0)
             # program_runner.add(_linear_regression_mpc_program, X=X, y=y)
-            # program_runner.add(_prog)
+            program_runner.add(_prog)
             loop.run_until_complete(program_runner.join())
     finally:
         loop.close()

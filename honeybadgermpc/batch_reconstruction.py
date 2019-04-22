@@ -159,6 +159,7 @@ async def batch_reconstruct(secret_shares, p, t, n, myid, send, recv, config=Non
     for j in range(n):
         send(j, ('R1', to_send[j]))
     end_time = time.time()
+    # bench_logger.info(f"[BatchReconstruct] P1 Send: {end_time - start_time}")
     bench_logger.info(f"[BatchReconstruct] P1 Send: {end_time - start_time}")
 
     # Step 2: Attempt to reconstruct P1
@@ -170,6 +171,7 @@ async def batch_reconstruct(secret_shares, p, t, n, myid, send, recv, config=Non
         return None
 
     end_time = time.time()
+    # print(f"[BatchReconstruct] P1 Reconstruct: {end_time - start_time}")
     bench_logger.info(f"[BatchReconstruct] P1 Reconstruct: {end_time - start_time}")
 
     # Step 3: Send R2 points
@@ -179,6 +181,7 @@ async def batch_reconstruct(secret_shares, p, t, n, myid, send, recv, config=Non
     for j in range(n):
         send(j, ('R2', to_send))
     end_time = time.time()
+    # bench_logger.info(f"[BatchReconstruct] P2 Send: {end_time - start_time}")
     bench_logger.info(f"[BatchReconstruct] P2 Send: {end_time - start_time}")
 
     # Step 4: Attempt to reconstruct R2
@@ -190,6 +193,7 @@ async def batch_reconstruct(secret_shares, p, t, n, myid, send, recv, config=Non
         return None
 
     end_time = time.time()
+    # bench_logger.info(f"[BatchReconstruct] P2 Reconstruct: {end_time - start_time}")
     bench_logger.info(f"[BatchReconstruct] P2 Reconstruct: {end_time - start_time}")
 
     task_r1.cancel()

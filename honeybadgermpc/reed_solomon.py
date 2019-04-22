@@ -5,7 +5,7 @@ from honeybadgermpc.ntl.helpers import fft, fft_interpolate, fft_batch_interpola
 from honeybadgermpc.wb_interpolate import make_wb_encoder_decoder
 from honeybadgermpc.exceptions import HoneyBadgerMPCError
 import logging
-
+import time
 
 class Encoder(object):
     """
@@ -281,9 +281,12 @@ class IncrementalDecoder(object):
         success = True
         if len(self._available_points) == self.degree + 1:
             # Optimistic decode
+            start_time = time.time()
             self._guess_decoded = self.decoder.decode_batch(self._z,
                                                             self._available_data)
             self._guess_encoded = self.encoder.encode_batch(self._guess_decoded)
+            end_time = time.time()
+            print(f"Guessing took {end_time - start_time}s")
         else:
             # We have a guess. It might be right. Check now
             for i in range(self.batch_size):
