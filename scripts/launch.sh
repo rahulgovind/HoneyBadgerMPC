@@ -35,4 +35,5 @@ tmux new-session     "${CMD} -d -f ${CONFIG_PATH}.0.json; sh" \; \
      splitw -h -p 50 "${CMD} -d -f ${CONFIG_PATH}.1.json; sh" \; \
      splitw -v -p 50 "${CMD} -d -f ${CONFIG_PATH}.2.json; sh" \; \
      selectp -t 0 \; \
-     splitw -v -p 50 "${CMD} -d -f ${CONFIG_PATH}.3.json; sh"
+     splitw -v -p 50 "${CMD} -d -f ${CONFIG_PATH}.3.json; sh" \; \
+     splitw -v -p 50 "${CMD} -d -f ${CONFIG_PATH}.4.json; sh"

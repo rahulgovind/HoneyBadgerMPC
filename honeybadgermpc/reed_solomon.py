@@ -7,6 +7,7 @@ from honeybadgermpc.exceptions import HoneyBadgerMPCError
 import logging
 import time
 
+
 class Encoder(object):
     """
     Generate encoding for given data
@@ -263,7 +264,8 @@ class IncrementalDecoder(object):
         # Ideally, any validation error should just be added to the set
         # of confirmed errors
         if len(data) != self.batch_size:
-            raise DecodeValidationError("Incorrect length of data")
+            raise DecodeValidationError(f"Incorrect length of data. "
+                                        f"Expected {self.batch_size} Actual {len(data)}")
 
         if data is None:
             return False
@@ -286,7 +288,7 @@ class IncrementalDecoder(object):
                                                             self._available_data)
             self._guess_encoded = self.encoder.encode_batch(self._guess_decoded)
             end_time = time.time()
-            print(f"Guessing took {end_time - start_time}s")
+            # print(f"Guessing took {end_time - start_time}s")
         else:
             # We have a guess. It might be right. Check now
             for i in range(self.batch_size):

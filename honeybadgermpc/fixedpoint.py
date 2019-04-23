@@ -13,6 +13,8 @@ from sklearn.model_selection import train_test_split
 import pandas as pd
 import gc
 
+import traceback
+
 ppe = None
 
 F = 32
@@ -23,12 +25,28 @@ Field = GF.get(p)
 USE_RANDOM_BIT_PPE = True
 random_lock = threading.Lock()
 
+open_array_counter = 0
+
+
+async def _deterministic_gather(*args):
+    result = []
+    for arg in args:
+        result.append(await arg)
+    return result
+
+
+def deterministic_gather(*args):
+    return asyncio.ensure_future(_deterministic_gather(*args))
+
 
 async def open_single(ctx, x, t=None):
     return await ctx.Share(x, t).open()
 
 
 async def open_array(ctx, arr, t=None):
+    global open_array_counter
+    open_array_counter += 1
+    print(f"open_array {open_array_counter}: {len(list(arr))}")
     return await ctx.ShareArray(list(arr), t).open()
 
 
@@ -51,7 +69,6 @@ async def reduce_array(ctx, arr):
         r_2t.append(r_2t_.v)
 
     diff = await open_array(ctx, list(map(lambda x, y: x - y, arr, r_2t)), 2 * ctx.t)
-
     return list(map(lambda x, y: x + y, diff, r_t))
 
 
@@ -646,7 +663,7 @@ class SuperFixedPoint(object):
         def callback(_):
             res.data.set_result(self.data.result() + other.data.result())
 
-        asyncio.gather(self.data, other.data).add_done_callback(callback)
+        deterministic_gather(self.data, other.data).add_done_callback(callback)
         return res
 
     __radd__ = __add__
@@ -660,7 +677,7 @@ class SuperFixedPoint(object):
         def callback(_):
             res.data.set_result(self.data.result() - other.data.result())
 
-        asyncio.gather(self.data, other.data).add_done_callback(callback)
+        deterministic_gather(self.data, other.data).add_done_callback(callback)
         return res
 
     def __rsub__(self, other):
@@ -695,7 +712,7 @@ class SuperFixedPoint(object):
         def result_callback(val):
             res.data.set_result(np.array(val.result()))
 
-        asyncio.gather(self.data, other.data).add_done_callback(reduce_callback)
+        deterministic_gather(self.data, other.data).add_done_callback(reduce_callback)
         return res
 
     __rmul__ = __mul__
@@ -766,7 +783,7 @@ class FixedPointNDArray(object):
             # print("Add callback done")
             res.data.set_result(np.array(self.data.result() + other.data.result()))
 
-        asyncio.gather(self.data, other.data).add_done_callback(callback)
+        deterministic_gather(self.data, other.data).add_done_callback(callback)
         return res
 
     __radd__ = __add__
@@ -782,7 +799,7 @@ class FixedPointNDArray(object):
             # print("Add callback done")
             res.data.set_result(np.array(self.data.result() - other.data.result()))
 
-        asyncio.gather(self.data, other.data).add_done_callback(callback)
+        deterministic_gather(self.data, other.data).add_done_callback(callback)
         return res
 
     def __rsub__(self, other):
@@ -809,7 +826,7 @@ class FixedPointNDArray(object):
         def result_callback(val):
             res.data.set_result(np.array(val.result()).reshape(res.shape))
 
-        asyncio.gather(self.data, other.data).add_done_callback(reduce_callback)
+        deterministic_gather(self.data, other.data).add_done_callback(reduce_callback)
         return res
 
     __rmul__ = __mul__
@@ -845,7 +862,7 @@ class FixedPointNDArray(object):
             # print("result_callback", val)
             res.data.set_result(np.array(val.result()).reshape(res.shape))
 
-        asyncio.gather(self.data, other.data).add_done_callback(reduce_callback)
+        deterministic_gather(self.data, other.data).add_done_callback(reduce_callback)
         return res
 
     def __neg__(self):
@@ -1053,7 +1070,7 @@ def concatenate(ctx, arr, axis=0):
                                             for i in range(len(arr))],
                                            axis=axis))
 
-    asyncio.gather(*[x.data for x in arr]).add_done_callback(callback)
+    deterministic_gather(*[x.data for x in arr]).add_done_callback(callback)
     return res
 
 
@@ -1075,7 +1092,7 @@ def uniform_random(low, high, shape, seed=0):
     return res
 
 
-def sigmoid(x):
+async def sigmoid(x):
     """
     :type x: array-like
     :return: approximate sigmoid of x
@@ -1087,8 +1104,9 @@ def sigmoid(x):
     very accurate after this point
     """
     less = (x > -2)
+    await less.resolve()
     gt = (x < 2)
-
+    await gt.resolve()
     x2 = x * x
     x3 = x * x2
     x5 = x3 * x2
@@ -1118,7 +1136,9 @@ async def linear_regression_mpc(ctx, X, y, epochs=1, learning_rate=0.05):
     N = X.shape[0]
     learning_rate = learning_rate / N
     for epoch in range(epochs):
+        print(f"Starting epoch {epoch}")
         dtheta = (X.T @ ((X @ theta) - y))
+        await dtheta.resolve()
         theta = theta - learning_rate * dtheta
         err = X @ theta - y
         print("Error: ", np.linalg.norm(await err.open()))
@@ -1170,7 +1190,7 @@ class NeuralNetwork(object):
             print(f"First layer linear operations took {end_time2 - start_time2}s")
 
             start_time2 = time.time()
-            l1 = sigmoid(y1)
+            l1 = await sigmoid(y1)
             await l1.resolve()
             end_time2 = time.time()
             print(f"First layer non-linear ops took {end_time2 - start_time2}s")
@@ -1180,7 +1200,7 @@ class NeuralNetwork(object):
             y2 = l1 @ self.w2
             await y2.resolve()
 
-            l2 = sigmoid(y2)
+            l2 = await sigmoid(y2)
 
             await l2.resolve()
             gc.collect()
@@ -1193,6 +1213,7 @@ class NeuralNetwork(object):
 
             print(f"--------------- Starting back-propagation ---------------")
             l2_delta = err * sigmoid_deriv(l2)
+            await l2_delta.resolve()
             l1_delta = (l2_delta @ self.w2.T) * sigmoid_deriv(l1)
             await l1_delta.open()
             gc.collect()
@@ -1207,9 +1228,9 @@ class NeuralNetwork(object):
             end_time = time.time()
             print(f"Epoch took {end_time - start_time}")
 
-    def evaluate(self, x):
-        l1 = sigmoid(x @ self.w1)
-        l2 = sigmoid(l1 @ self.w2)
+    async def evaluate(self, x):
+        l1 = await sigmoid(x @ self.w1)
+        l2 = await sigmoid(l1 @ self.w2)
         return (l2 > 0.5)
 
 
@@ -1225,7 +1246,8 @@ async def _neural_network_mpc_program(ctx, x_train, y_train, x_test, y_test):
     y_train = FixedPointNDArray(ctx, y_train.reshape(-1, 1))
     await nn.fit(ctx, x_train, y_train)
     x_test = FixedPointNDArray(ctx, x_test)
-    print("Accuracy: ", accuracy((await (nn.evaluate(x_test)).open()), y_test))
+    evaluations = await nn.evaluate(x_test)
+    print("Accuracy: ", accuracy((await evaluations.open()), y_test))
 
 
 async def _linear_regression_mpc_program(ctx, X, y):
@@ -1248,14 +1270,10 @@ async def _prog(ctx):
     # b = await approx_sqrt(ctx, a, K, F)
     # b_opened = await open_nd_array(ctx, b)
     # print(np.vectorize(from_fixed_point_repr)(b_opened))
-    a = np.vectorize(to_share)([0.1, -0.1]) + 2 ** (K - 5)
-
-    # a = FixedPointNDArray(ctx, np.array([[4.0, 4.0], [1.0, 3.0]]))
-    # b = a - a.mean(axis=1).reshape((2, 1))
-    # b = a.var(axis=1)
-    b = (await trunc_pr_nd_array(ctx, a, K, K - 3)) * 2 ** (K - 3)
-    b_opened = await open_nd_array(ctx, b)
-    print(np.vectorize(from_fixed_point_repr)(b_opened))
+    a = FixedPointNDArray(ctx, np.array([4.0, 4.0]))
+    b = FixedPointNDArray(ctx, np.array([4.0, 4.0]))
+    c = a * b
+    print(await c.open())
     # print(await b.open())
     # print(await b.open())
 
@@ -1263,7 +1281,7 @@ async def _prog(ctx):
 if __name__ == "__main__":
     n = 5
     t = 1
-    multiprocess = False
+    multiprocess = True
     ppe = PreProcessedElements()
     logging.info("Generating zeros in sharedata/")
     ppe.generate_zeros(1000, n, t)
@@ -1293,9 +1311,21 @@ if __name__ == "__main__":
                 program_runner = ProcessProgramRunner(peers, n, t, my_id,
                                                       config)
                 await program_runner.start()
-                # send, recv = program_runner.get_send_and_recv(0)
+                df = pd.read_csv('data.csv')
+                del df['Unnamed: 32']
 
-                program_runner.add(1, _neural_network_mpc_program)
+                X = df.iloc[:, 2:].values
+                y = np.vectorize(lambda x: 1 if x == 'M' else 0)(df.iloc[:, 1].values)
+                x_train, x_test, y_train, y_test = train_test_split(X, y, test_size=0.3,
+                                                                    random_state=0)
+
+                # Normalize values
+                x_train = (x_train - np.mean(x_train, axis=0)) / np.std(x_train, axis=0)
+                x_test = (x_test - np.mean(x_test, axis=0)) / np.std(x_test, axis=0)
+
+                program_runner.add(0, _neural_network_mpc_program,
+                                   x_train=x_train[:32], y_train=y_train[:32],
+                                   x_test=x_test[:32], y_test=y_test[:32])
                 await program_runner.join()
                 await program_runner.close()
 
@@ -1305,7 +1335,7 @@ if __name__ == "__main__":
                 HbmpcConfig.my_id))
         else:
             program_runner = TaskProgramRunner(n, t, config)
-
+            #
             # df = pd.read_csv('data.csv')
             # del df['Unnamed: 32']
             #
@@ -1321,11 +1351,11 @@ if __name__ == "__main__":
             # program_runner.add(_neural_network_mpc_program,
             #                    x_train=x_train[:32], y_train=y_train[:32],
             #                    x_test=x_test[:32], y_test=y_test[:32])
-            # X = np.random.uniform(0, 10, (15, 3))
-            # y = 9 * X[:, 0] + 4 * X[:, 1] + 7 * X[:, 2] + 2
-            # X = (X - np.mean(X, axis=0)) / np.std(X, axis=0)
-            # program_runner.add(_linear_regression_mpc_program, X=X, y=y)
-            program_runner.add(_prog)
+            X = np.random.uniform(0, 10, (15, 3))
+            y = 9 * X[:, 0] + 4 * X[:, 1] + 7 * X[:, 2] + 2
+            X = (X - np.mean(X, axis=0)) / np.std(X, axis=0)
+            program_runner.add(_linear_regression_mpc_program, X=X, y=y)
+            # program_runner.add(_prog)
             loop.run_until_complete(program_runner.join())
     finally:
         loop.close()
