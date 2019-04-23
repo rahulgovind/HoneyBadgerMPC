@@ -5,12 +5,26 @@
 # classes are used (like ZZ, mat_ZZ_p, etc) and also for NTL function names
 from .ctypes cimport ZZ_c, ZZ_p_c, mat_ZZ_p, vec_ZZ_p, ZZ_pX_c
 from .ctypes cimport ZZ_p_conv_from_int, mat_ZZ_p_mul, ZZ_conv_from_int
+from .ctypes cimport ZZFromBytes, bytesFromZZ, to_ZZ_p, to_ZZ
 from .objectwrapper cimport ccrepr, ccreadstr
 from .ctypes cimport SetNumThreads, AvailableThreads, ZZ_p_init, ZZ_pX_get_coeff, \
     ZZ_pX_set_coeff, ZZ_pX_eval, SqrRootMod
 from cpython.int cimport PyInt_AS_LONG
 from cython.parallel import parallel, prange
 import time
+
+cdef ZZ_c intToZZ(x):
+    num = (x.bit_length() + 7) // 8
+    return ZZFromBytes(x.to_bytes(num, 'little'), num)
+
+cdef ZZToInt(ZZ_c X):
+    return int.from_bytes(bytesFromZZ(X), 'little')
+
+cdef ZZ_p_c intToZZp(x):
+    return to_ZZ_p(intToZZ(x))
+
+cdef ZZpToInt(ZZ_p_c X):
+    return ZZToInt(to_ZZ(X))
 
 cdef ZZ_c py_obj_to_ZZ(object v):
     cdef ZZ_c result
@@ -161,8 +175,10 @@ cpdef vandermonde_batch_interpolate(x, data_list, modulus):
     for i in range(n_chunks):
         l = len(data_list[i])
         for j in range(l):
+            # m[j][i] = intToZZp(data_list[i][j])
             m[j][i] = py_obj_to_ZZ_p(data_list[i][j])
         for j in range(l, k):
+            # m[j][i] = intToZZp(0)
             m[j][i] = py_obj_to_ZZ_p(0)
     cdef mat_ZZ_p reconstructions
 
@@ -174,9 +190,9 @@ cpdef vandermonde_batch_interpolate(x, data_list, modulus):
 
     polynomials = [[None] * k for _ in range(n_chunks)]
 
-
     for i in range(n_chunks):
         for j in range(k):
+            # polynomials[i][j] = ZZpToInt(reconstructions[j][i])
             polynomials[i][j] = int(ccrepr(reconstructions[j][i]))
     reconstructions.kill()
     m.kill()
@@ -301,6 +317,7 @@ def fft_batch_interpolate(zs, ys_list, omega, modulus, int n):
     for i in range(n_chunks):
         y_vec_list[i].SetLength(k)
         for j in range(k):
+            # y_vec_list[i][j] = intToZZp(ys_list[i][j])
             y_vec_list[i][j] = py_obj_to_ZZ_p(ys_list[i][j])
 
     start_time = time.time()
@@ -315,6 +332,7 @@ def fft_batch_interpolate(zs, ys_list, omega, modulus, int n):
     result = [[None] * k for _ in range(n_chunks)]
     for i in range(n_chunks):
         for j in range(k):
+            # result[i][j] = ZZpToInt(result_vec_list[i][j])
             result[i][j] = int(ccrepr(result_vec_list[i][j]))
 
     return result

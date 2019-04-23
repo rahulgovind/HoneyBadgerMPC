@@ -25,6 +25,7 @@ cdef extern from "ntlwrapper.h":
         vec_ZZ_p& operator[](size_t)
         void kill()
 
+
     void ZZ_p_init "ZZ_p::init"(ZZ_c x) nogil
     void SetNumThreads(int n)
     void ZZ_conv_from_int "conv"(ZZ_c x, int i)
@@ -39,3 +40,7 @@ cdef extern from "ntlwrapper.h":
     void ZZ_pX_eval "eval" (ZZ_p_c b, ZZ_pX_c f, ZZ_p_c a)
     void SqrRootMod "SqrRootMod"(ZZ_c x, ZZ_c a, ZZ_c n)
     int AvailableThreads()
+    ZZ_c ZZFromBytes(const unsigned char*, long)
+    unsigned char* bytesFromZZ(ZZ_c x)
+    ZZ_p_c to_ZZ_p(ZZ_c)
+    ZZ_c to_ZZ "rep"(ZZ_p_c)
