@@ -9,6 +9,8 @@ from .objectwrapper cimport ccrepr, ccreadstr
 from .ctypes cimport SetNumThreads, AvailableThreads, ZZ_p_init, ZZ_pX_get_coeff, \
     ZZ_pX_set_coeff, ZZ_pX_eval, SqrRootMod
 from cpython.int cimport PyInt_AS_LONG
+from cython.parallel import parallel, prange
+import time
 
 cdef ZZ_c py_obj_to_ZZ(object v):
     cdef ZZ_c result
@@ -163,9 +165,16 @@ cpdef vandermonde_batch_interpolate(x, data_list, modulus):
         for j in range(l, k):
             m[j][i] = py_obj_to_ZZ_p(0)
     cdef mat_ZZ_p reconstructions
+
+    start_time = time.time()
     mat_ZZ_p_mul(reconstructions, r, m)
 
+    end_time = time.time()
+    print("Parallelizable section took ", end_time - start_time)
+
     polynomials = [[None] * k for _ in range(n_chunks)]
+
+
     for i in range(n_chunks):
         for j in range(k):
             polynomials[i][j] = int(ccrepr(reconstructions[j][i]))
@@ -275,7 +284,8 @@ def fft_batch_interpolate(zs, ys_list, omega, modulus, int n):
     cdef ZZ_pX_c A
     cdef ZZ_p_c zz_omega
     cdef int n_chunks = len(ys_list)
-
+    cdef ZZ_c zz_modulus
+    zz_modulus = py_obj_to_ZZ(modulus)
     ZZ_p_init(py_obj_to_ZZ(modulus))
     zz_omega = py_obj_to_ZZ_p(omega)
     z_vec.resize(k)
@@ -293,10 +303,15 @@ def fft_batch_interpolate(zs, ys_list, omega, modulus, int n):
         for j in range(k):
             y_vec_list[i][j] = py_obj_to_ZZ_p(ys_list[i][j])
 
-    for i in range(n_chunks):
-        fnt_decode_step2_c(result_vec_list[i], A, Ad_evals_vec, z_vec, y_vec_list[i],
-                           zz_omega, n)
+    start_time = time.time()
+    with nogil, parallel():
 
+        ZZ_p_init(zz_modulus)
+        for i in prange(n_chunks):
+            fnt_decode_step2_c(result_vec_list[i], A, Ad_evals_vec, z_vec, y_vec_list[i],
+                               zz_omega, n)
+    end_time = time.time()
+    print(f"Parallel section took {end_time - start_time} time")
     result = [[None] * k for _ in range(n_chunks)]
     for i in range(n_chunks):
         for j in range(k):
@@ -304,8 +319,7 @@ def fft_batch_interpolate(zs, ys_list, omega, modulus, int n):
 
     return result
 
-cpdef SetNTLNumThreads(x):
-    x = int(x)
+cpdef SetNTLNumThreads(int x):
     SetNumThreads(x)
 
 cpdef int AvailableNTLThreads():

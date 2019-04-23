@@ -17,7 +17,7 @@ cdef extern from "ntlwrapper.h":
 
     cdef cppclass vec_ZZ_p:
         ZZ_p_c& operator[](size_t)
-        void SetLength(int n)
+        void SetLength(int n) nogil
         void kill()
         size_t length()
     cdef cppclass mat_ZZ_p:
@@ -25,7 +25,7 @@ cdef extern from "ntlwrapper.h":
         vec_ZZ_p& operator[](size_t)
         void kill()
 
-    void ZZ_p_init "ZZ_p::init"(ZZ_c x)
+    void ZZ_p_init "ZZ_p::init"(ZZ_c x) nogil
     void SetNumThreads(int n)
     void ZZ_conv_from_int "conv"(ZZ_c x, int i)
     void ZZ_p_conv_from_int "conv"(ZZ_p_c x, int i)
