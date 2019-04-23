@@ -3,8 +3,8 @@
 # The data validation and checking must be done in python in all cases!
 # PEP8 standards are observed wherever possible but ignored in cases whether NTL
 # classes are used (like ZZ, mat_ZZ_p, etc) and also for NTL function names
-from .ctypes cimport ZZ_c, ZZ_p_c, mat_ZZ_p, vec_ZZ_p, ZZ_pX_c
-from .ctypes cimport ZZ_p_conv_from_int, mat_ZZ_p_mul, ZZ_conv_from_int
+from .ctypes cimport ZZ, ZZ_p, mat_ZZ_p, vec_ZZ_p, ZZ_pX_c
+from .ctypes cimport ZZ_ponv_from_int, mat_ZZ_p_mul, ZZonv_from_int
 from .ctypes cimport ZZFromBytes, bytesFromZZ, to_ZZ_p, to_ZZ
 from .objectwrapper cimport ccrepr, ccreadstr
 from .ctypes cimport SetNumThreads, AvailableThreads, ZZ_p_init, ZZ_pX_get_coeff, \
@@ -13,26 +13,26 @@ from cpython.int cimport PyInt_AS_LONG
 from cython.parallel import parallel, prange
 import time
 
-cdef ZZ_c intToZZ(x):
+cdef ZZ intToZZ(x):
     num = (x.bit_length() + 7) // 8
     return ZZFromBytes(x.to_bytes(num, 'little'), num)
 
-cdef ZZToInt(ZZ_c X):
+cdef ZZToInt(ZZ X):
     return int.from_bytes(bytesFromZZ(X), 'little')
 
-cdef ZZ_p_c intToZZp(x):
+cdef ZZ_p intToZZp(x):
     return to_ZZ_p(intToZZ(x))
 
-cdef ZZpToInt(ZZ_p_c X):
-    return ZZToInt(to_ZZ(X))
+cdef ZZpToInt(ZZ_p X):
+    if int(ccrepr(to_ZZ(X))) != ZZToInt(to_ZZ(X)):
+        print("Not equal ", int(ccrepr(to_ZZ(X))), ZZToInt(to_ZZ(X)))
+    return int(ccrepr(to_ZZ(X)))
+    # return ZZToInt(to_ZZ(X))
 
-cdef ZZ_c py_obj_to_ZZ(object v):
-    cdef ZZ_c result
+cdef ZZ py_obj_to_ZZ(object v):
+    cdef ZZ result
     if isinstance(v, int):
-        if v <= 2147483647:
-            ZZ_conv_from_int(result, PyInt_AS_LONG(v))
-        else:
-            ccreadstr(result, str(v))
+        result = intToZZ(v)
     elif v is not None:
         ccreadstr(result, v)
     else:
@@ -40,13 +40,10 @@ cdef ZZ_c py_obj_to_ZZ(object v):
 
     return result
 
-cdef ZZ_p_c py_obj_to_ZZ_p(object v):
-    cdef ZZ_p_c result
+cdef ZZ_p py_obj_to_ZZ_p(object v):
+    cdef ZZ_p result
     if isinstance(v, int):
-        if v <= 2147483647:
-            ZZ_p_conv_from_int(result, PyInt_AS_LONG(v))
-        else:
-            ccreadstr(result, str(v))
+        result = intToZZp(v)
     elif v is not None:
         ccreadstr(result, v)
     else:
@@ -62,10 +59,10 @@ cdef vec_ZZ_p py_list_to_vec_ZZ_p(object v):
     result.SetLength(len(v))
     cdef int i
     for i in range(len(v)):
-        result[i] = py_obj_to_ZZ_p(v[i])
+        result[i] = intToZZp(v[i])
     return result
 
-cdef str ZZ_to_str(ZZ_c x):
+cdef str ZZ_to_str(ZZ x):
     return ccrepr(x)
 
 cpdef lagrange_interpolate(x, y, modulus):
@@ -80,16 +77,16 @@ cpdef lagrange_interpolate(x, y, modulus):
     """
     assert len(x) == len(y)
 
-    cdef vector[ZZ_c] x_vec;
-    cdef vector[ZZ_c] y_vec;
-    cdef vector[ZZ_c] r_vec;
+    cdef vector[ZZ] x_vec;
+    cdef vector[ZZ] y_vec;
+    cdef vector[ZZ] r_vec;
 
     for xi in x:
         x_vec.push_back(py_obj_to_ZZ(xi))
     for yi in y:
         y_vec.push_back(py_obj_to_ZZ(yi))
 
-    cdef ZZ_c zz_modulus = py_obj_to_ZZ(modulus)
+    cdef ZZ zz_modulus = py_obj_to_ZZ(modulus)
     interpolate_c(r_vec, x_vec, y_vec, zz_modulus)
 
     result = []
@@ -100,15 +97,15 @@ cpdef lagrange_interpolate(x, y, modulus):
 cpdef evaluate(polynomial, x, modulus):
     """Evaluate polynomial at x"""
     cdef ZZ_pX_c poly
-    cdef ZZ_p_c y
+    cdef ZZ_p y
     cdef int i
 
     ZZ_p_init(py_obj_to_ZZ(modulus))
     poly.SetMaxLength(len(polynomial))
     for i in range(len(polynomial)):
-        ZZ_pX_set_coeff(poly, i, py_obj_to_ZZ_p(polynomial[i]))
+        ZZ_pX_set_coeff(poly, i, intToZZp(polynomial[i]))
 
-    ZZ_pX_eval(y, poly, py_obj_to_ZZ_p(x))
+    ZZ_pX_eval(y, poly, intToZZp(x))
     return int(ccrepr(y))
 
 cpdef vandermonde_inverse(x, modulus):
@@ -119,12 +116,12 @@ cpdef vandermonde_inverse(x, modulus):
     :type modulus: integers
     :return: 
     """
-    cdef vector[ZZ_c] x_vec;
+    cdef vector[ZZ] x_vec;
 
     for xi in x:
         x_vec.push_back(py_obj_to_ZZ(xi))
 
-    cdef ZZ_c zz_modulus = py_obj_to_ZZ(modulus)
+    cdef ZZ zz_modulus = py_obj_to_ZZ(modulus)
     cdef mat_ZZ_p r
     vandermonde_inverse_c(r, x_vec, zz_modulus)
 
@@ -133,7 +130,6 @@ cpdef vandermonde_inverse(x, modulus):
 
 class InterpolationError(Exception):
     pass
-
 
 cpdef vandermonde_batch_interpolate(x, data_list, modulus):
     """Interpolate polynomials using vandermonde matrices
@@ -156,12 +152,12 @@ cpdef vandermonde_batch_interpolate(x, data_list, modulus):
     :type modulus: integer
     :return: 
     """
-    cdef vector[ZZ_c] x_vec;
+    cdef vector[ZZ] x_vec;
 
     for xi in x:
         x_vec.push_back(py_obj_to_ZZ(xi))
 
-    cdef ZZ_c zz_modulus = py_obj_to_ZZ(modulus)
+    cdef ZZ zz_modulus = py_obj_to_ZZ(modulus)
     cdef mat_ZZ_p r
     d = vandermonde_inverse_c(r, x_vec, zz_modulus)
     if d is False:
@@ -175,25 +171,25 @@ cpdef vandermonde_batch_interpolate(x, data_list, modulus):
     for i in range(n_chunks):
         l = len(data_list[i])
         for j in range(l):
-            # m[j][i] = intToZZp(data_list[i][j])
-            m[j][i] = py_obj_to_ZZ_p(data_list[i][j])
+            m[j][i] = intToZZp(data_list[i][j])
         for j in range(l, k):
-            # m[j][i] = intToZZp(0)
-            m[j][i] = py_obj_to_ZZ_p(0)
+            m[j][i] = intToZZp(0)
     cdef mat_ZZ_p reconstructions
-
-    start_time = time.time()
+    end_time = time.time()
     mat_ZZ_p_mul(reconstructions, r, m)
 
     end_time = time.time()
-    print("Parallelizable section took ", end_time - start_time)
 
     polynomials = [[None] * k for _ in range(n_chunks)]
 
     for i in range(n_chunks):
         for j in range(k):
-            # polynomials[i][j] = ZZpToInt(reconstructions[j][i])
-            polynomials[i][j] = int(ccrepr(reconstructions[j][i]))
+            polynomials[i][j] = 0
+    end_time = time.time()
+
+    for i in range(n_chunks):
+        for j in range(k):
+            polynomials[i][j] = ZZpToInt(reconstructions[j][i])
     reconstructions.kill()
     m.kill()
     r.kill()
@@ -219,7 +215,7 @@ cpdef vandermonde_batch_evaluate(x, polynomials, modulus):
     # Degree of polynomial. Actually number of coefficients.
     cdef int d = max([len(poly) for poly in polynomials])
 
-    cdef ZZ_c zz_modulus = py_obj_to_ZZ(modulus)
+    cdef ZZ zz_modulus = py_obj_to_ZZ(modulus)
     ZZ_p_init(zz_modulus)
 
     # Set vm_matrix
@@ -231,9 +227,9 @@ cpdef vandermonde_batch_evaluate(x, polynomials, modulus):
     for i in range(k):
         l = len(polynomials[i])
         for j in range(l):
-            poly_matrix[j][i] = py_obj_to_ZZ_p(polynomials[i][j])
+            poly_matrix[j][i] = intToZZp(polynomials[i][j])
         for j in range(l, d):
-            poly_matrix[j][i] = py_obj_to_ZZ_p(0)
+            poly_matrix[j][i] = intToZZp(0)
 
     # Finally multiply matrices. This gives evaluation of polynomials at
     # all points chosen
@@ -243,26 +239,27 @@ cpdef vandermonde_batch_evaluate(x, polynomials, modulus):
     result = [[None] * n for _ in range(k)]
     for i in range(n):
         for j in range(k):
-            result[j][i] = int(ccrepr(res_matrix[i][j]))
+            result[j][i] = ZZpToInt(res_matrix[i][j])
     return result
 
 cpdef fft(coeffs, omega, modulus, int n):
     cdef int i, d;
     cdef vec_ZZ_p coeffs_vec, result_vec;
 
-    ZZ_p_init(py_obj_to_ZZ(modulus))
+    ZZ_p_init(intToZZ(modulus))
 
     d = len(coeffs)
     coeffs_vec.SetLength(d)
     for i in range(d):
-        coeffs_vec[i] = py_obj_to_ZZ_p(coeffs[i])
+        coeffs_vec[i] = intToZZp(coeffs[i])
 
-    cdef ZZ_p_c zz_omega = py_obj_to_ZZ_p(omega)
+    cdef ZZ_p zz_omega = intToZZp(omega)
     fft_c(result_vec, coeffs_vec, zz_omega, n)
 
     result = [None] * n
     for i in range(n):
-        result[i] = int(ccrepr(result_vec[i]))
+        result[i] = ZZpToInt(result_vec[i])
+        # result[i] = int(ccrepr((result_vec[i])))
 
     return result
 
@@ -272,17 +269,17 @@ def fft_interpolate(zs, ys, omega, modulus, int n):
     cdef vector[int] z_vec;
     cdef vec_ZZ_p y_vec, Ad_evals_vec, P_coeffs
     cdef ZZ_pX_c A
-    cdef ZZ_p_c zz_omega
+    cdef ZZ_p zz_omega
 
-    ZZ_p_init(py_obj_to_ZZ(modulus))
-    zz_omega = py_obj_to_ZZ_p(omega)
+    ZZ_p_init(intToZZ(modulus))
+    zz_omega = intToZZp(omega)
     z_vec.resize(k)
     for i in range(k):
         z_vec[i] = PyInt_AS_LONG(zs[i])
 
     y_vec.SetLength(k)
     for i in range(k):
-        y_vec[i] = py_obj_to_ZZ_p(ys[i])
+        y_vec[i] = intToZZp(ys[i])
 
     fnt_decode_step1_c(A, Ad_evals_vec, z_vec, zz_omega, n)
     fnt_decode_step2_c(P_coeffs, A, Ad_evals_vec, z_vec, y_vec, zz_omega, n)
@@ -298,12 +295,12 @@ def fft_batch_interpolate(zs, ys_list, omega, modulus, int n):
     cdef vector[int] z_vec;
     cdef vec_ZZ_p y_vec, Ad_evals_vec, P_coeffs
     cdef ZZ_pX_c A
-    cdef ZZ_p_c zz_omega
+    cdef ZZ_p zz_omega
     cdef int n_chunks = len(ys_list)
-    cdef ZZ_c zz_modulus
-    zz_modulus = py_obj_to_ZZ(modulus)
-    ZZ_p_init(py_obj_to_ZZ(modulus))
-    zz_omega = py_obj_to_ZZ_p(omega)
+    cdef ZZ zz_modulus
+    zz_modulus = intToZZ(modulus)
+    ZZ_p_init(intToZZ(modulus))
+    zz_omega = intToZZp(omega)
     z_vec.resize(k)
     for i in range(k):
         z_vec[i] = PyInt_AS_LONG(zs[i])
@@ -317,23 +314,18 @@ def fft_batch_interpolate(zs, ys_list, omega, modulus, int n):
     for i in range(n_chunks):
         y_vec_list[i].SetLength(k)
         for j in range(k):
-            # y_vec_list[i][j] = intToZZp(ys_list[i][j])
-            y_vec_list[i][j] = py_obj_to_ZZ_p(ys_list[i][j])
+            y_vec_list[i][j] = intToZZp(ys_list[i][j])
 
-    start_time = time.time()
     with nogil, parallel():
 
         ZZ_p_init(zz_modulus)
         for i in prange(n_chunks):
             fnt_decode_step2_c(result_vec_list[i], A, Ad_evals_vec, z_vec, y_vec_list[i],
                                zz_omega, n)
-    end_time = time.time()
-    print(f"Parallel section took {end_time - start_time} time")
     result = [[None] * k for _ in range(n_chunks)]
     for i in range(n_chunks):
         for j in range(k):
-            # result[i][j] = ZZpToInt(result_vec_list[i][j])
-            result[i][j] = int(ccrepr(result_vec_list[i][j]))
+            result[i][j] = ZZpToInt(result_vec_list[i][j])
 
     return result
 
@@ -346,12 +338,12 @@ cpdef int AvailableNTLThreads():
 cpdef gao_interpolate(x, y, int k, modulus, z=None, omega=None, order=None,
                       use_fft=False):
     cdef vec_ZZ_p x_vec, y_vec, res_vec, err_vec
-    cdef ZZ_p_c zz_omega
+    cdef ZZ_p zz_omega
     cdef vector[int] z_vec;
     cdef int i, n, int_order
     cdef int success
     assert len(x) == len(y)
-    ZZ_p_init(py_obj_to_ZZ(modulus))
+    ZZ_p_init(intToZZ(modulus))
 
     is_null = [yi is None for yi in y]
     x = [x[i] for i in range(len(x)) if not is_null[i]]
@@ -364,15 +356,15 @@ cpdef gao_interpolate(x, y, int k, modulus, z=None, omega=None, order=None,
     y_vec.SetLength(n)
 
     for i in range(n):
-        x_vec[i] = py_obj_to_ZZ_p(x[i])
-        y_vec[i] = py_obj_to_ZZ_p(y[i])
+        x_vec[i] = intToZZp(x[i])
+        y_vec[i] = intToZZp(y[i])
 
     if use_fft is True:
         assert z is not None
         assert len(z) is n
         assert omega is not None
 
-        zz_omega = py_obj_to_ZZ_p(omega)
+        zz_omega = intToZZp(omega)
         int_order = int(order)
         z_vec.resize(n)
         for i in range(n):
@@ -396,6 +388,6 @@ cpdef gao_interpolate(x, y, int k, modulus, z=None, omega=None, order=None,
     return None, None
 
 def sqrt_mod(a, n):
-    cdef ZZ_c x
-    SqrRootMod(x, py_obj_to_ZZ(a), py_obj_to_ZZ(n))
+    cdef ZZ x
+    SqrRootMod(x, intToZZ(a), intToZZ(n))
     return int(ccrepr(x))
