@@ -1,7 +1,8 @@
 from honeybadgermpc.ntl.helpers import vandermonde_batch_evaluate, \
     vandermonde_batch_interpolate
 from honeybadgermpc.ntl.helpers import gao_interpolate
-from honeybadgermpc.ntl.helpers import fft, fft_interpolate, fft_batch_interpolate
+from honeybadgermpc.ntl.helpers import fft, fft_interpolate, fft_batch_interpolate, \
+    fft_batch_evaluate
 from honeybadgermpc.wb_interpolate import make_wb_encoder_decoder
 from honeybadgermpc.exceptions import HoneyBadgerMPCError
 import logging
@@ -96,8 +97,7 @@ class FFTEncoder(Encoder):
         return fft(data, self.omega, self.modulus, self.order)[:self.n]
 
     def encode_batch(self, data):
-        return [fft(d, self.omega, self.modulus, self.order)[:self.n]
-                for d in data]
+        return fft_batch_evaluate(data, self.omega, self.modulus, self.order, self.n)
 
 
 class VandermondeDecoder(Decoder):

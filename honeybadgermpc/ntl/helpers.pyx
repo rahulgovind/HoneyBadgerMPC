@@ -288,6 +288,38 @@ cpdef fft2(coeffs, omega, modulus, int n, int k):
 
     return result
 
+cpdef fft_batch_evaluate(coeffs, omega, modulus, int n, int k):
+    cdef int i, d;
+    cdef vector[vec_ZZ_p] coeffs_vec_list, result_vec_list
+    cdef ZZ zz_modulus
+
+    zz_modulus = intToZZ(modulus)
+    ZZ_p_init(zz_modulus)
+
+    batch_size = len(coeffs)
+    d = len(coeffs[0])
+
+    coeffs_vec_list.resize(batch_size)
+    result_vec_list.resize(batch_size)
+
+    for i in range(batch_size):
+        coeffs_vec_list[i].SetLength(d)
+        for j in range(d):
+            coeffs_vec_list[i][j] = intToZZp(coeffs[i][j])
+
+    cdef ZZ_p zz_omega = intToZZp(omega)
+    with nogil, parallel():
+        ZZ_p_init(zz_modulus)
+        for i in prange(batch_size):
+            fft2_c(result_vec_list[i], coeffs_vec_list[i], zz_omega, n, k)
+
+    result = [[None] * k for _ in range(batch_size)]
+    for i in range(batch_size):
+        for j in range(k):
+            result[i][j] = ZZpToInt(result_vec_list[i][j])
+
+    return result
+
 def fft_interpolate(zs, ys, omega, modulus, int n):
     cdef int i
     cdef int k = len(zs)
