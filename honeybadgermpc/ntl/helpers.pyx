@@ -12,6 +12,7 @@ from .ctypes cimport SetNumThreads, AvailableThreads, ZZ_p_init, ZZ_pX_get_coeff
 from cpython.int cimport PyInt_AS_LONG
 from cython.parallel import parallel, prange
 import time
+from libc.stdlib cimport free
 
 cdef ZZ intToZZ(x):
     num = (x.bit_length() + 7) // 8
@@ -19,7 +20,9 @@ cdef ZZ intToZZ(x):
 
 cdef ZZToInt(ZZ X):
     cdef int n = ZZNumBytes(X) + 1
-    return int.from_bytes(bytesFromZZ(X)[:n], 'little')
+    cdef unsigned char*b = bytesFromZZ(X)
+    result = int.from_bytes(b[:n], 'little')
+    free(b)
 
 cdef ZZ_p intToZZp(x):
     return to_ZZ_p(intToZZ(x))
@@ -128,6 +131,7 @@ cpdef vandermonde_inverse(x, modulus):
 
 class InterpolationError(Exception):
     pass
+
 
 cpdef vandermonde_batch_interpolate(x, data_list, modulus):
     """Interpolate polynomials using vandermonde matrices
