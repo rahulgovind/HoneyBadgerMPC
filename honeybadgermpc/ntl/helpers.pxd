@@ -8,8 +8,9 @@ cdef extern from "rsdecode_impl.h":
     cdef bool vandermonde_inverse_c "vandermonde_inverse"(mat_ZZ_p r, vector[ZZ] x,
                                                           ZZ modulus)
     cdef void set_vm_matrix_c "set_vm_matrix"(mat_ZZ_p r, vec_ZZ_p x_list,
-                                              int d, ZZ modulus)
+                                              int d)
     cdef void fft_c "fft"(vec_ZZ_p r, vec_ZZ_p coeffs, ZZ_p omega, int n)
+    cdef void fft2_c "fft2"(vec_ZZ_p r, vec_ZZ_p coeffs, ZZ_p omega, int n, int k)
     cdef void fnt_decode_step1_c "fnt_decode_step1"(ZZ_pX_c A_coeffs,
                                                     vec_ZZ_p Ad_evals,
                                                     vector[int] z, ZZ_p omega, int n)
@@ -27,3 +28,5 @@ cdef extern from "rsdecode_impl.h":
                                                           vec_ZZ_p y_vec,
                                                           ZZ_p omega,
                                                           int k, int n, int order)
+
+    void _set_interpolator_matrix(ZZ_p omega, int n)

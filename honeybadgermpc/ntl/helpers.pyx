@@ -14,6 +14,10 @@ from cython.parallel import parallel, prange
 import time
 from libc.stdlib cimport free
 
+cpdef set_interpolator_matrix(omega, n, p):
+    ZZ_p_init(intToZZ(p))
+    _set_interpolator_matrix(intToZZp(omega), n)
+
 cdef ZZ intToZZ(x):
     num = (x.bit_length() + 7) // 8
     return ZZFromBytes(x.to_bytes(num, 'little'), num)
@@ -223,7 +227,7 @@ cpdef vandermonde_batch_evaluate(x, polynomials, modulus):
 
     # Set vm_matrix
     cdef vec_ZZ_p x_vec = py_list_to_vec_ZZ_p(x)
-    set_vm_matrix_c(vm_matrix, x_vec, d, zz_modulus)
+    set_vm_matrix_c(vm_matrix, x_vec, d)
 
     # Set matrix with polynomial coefficients
     poly_matrix.SetDims(d, k)
@@ -261,6 +265,27 @@ cpdef fft(coeffs, omega, modulus, int n):
 
     result = [None] * n
     for i in range(n):
+        result[i] = ZZpToInt(result_vec[i])
+        # result[i] = int(ccrepr((result_vec[i])))
+
+    return result
+
+cpdef fft2(coeffs, omega, modulus, int n, int k):
+    cdef int i, d;
+    cdef vec_ZZ_p coeffs_vec, result_vec;
+
+    ZZ_p_init(intToZZ(modulus))
+
+    d = len(coeffs)
+    coeffs_vec.SetLength(d)
+    for i in range(d):
+        coeffs_vec[i] = intToZZp(coeffs[i])
+
+    cdef ZZ_p zz_omega = intToZZp(omega)
+    fft2_c(result_vec, coeffs_vec, zz_omega, n, k)
+
+    result = [None] * k
+    for i in range(k):
         result[i] = ZZpToInt(result_vec[i])
         # result[i] = int(ccrepr((result_vec[i])))
 
@@ -319,12 +344,15 @@ def fft_batch_interpolate(zs, ys_list, omega, modulus, int n):
         for j in range(k):
             y_vec_list[i][j] = intToZZp(ys_list[i][j])
 
+    start_time = time.time()
     with nogil, parallel():
 
         ZZ_p_init(zz_modulus)
         for i in prange(n_chunks):
             fnt_decode_step2_c(result_vec_list[i], A, Ad_evals_vec, z_vec, y_vec_list[i],
                                zz_omega, n)
+    end_time = time.time()
+    print("Parallel section: ", end_time - start_time)
     result = [[None] * k for _ in range(n_chunks)]
     for i in range(n_chunks):
         for j in range(k):

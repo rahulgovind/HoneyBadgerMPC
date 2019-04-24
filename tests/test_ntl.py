@@ -1,7 +1,7 @@
 from honeybadgermpc.ntl.helpers import lagrange_interpolate, \
     vandermonde_batch_interpolate, vandermonde_batch_evaluate, \
     fft, fft_interpolate, fft_batch_interpolate, \
-    gao_interpolate, evaluate, sqrt_mod
+    gao_interpolate, evaluate, sqrt_mod, fft2
 import random
 
 
@@ -73,6 +73,26 @@ def test_fft_big(galois_field, galois_field_roots):
     # Then
     assert len(fft_rep) == n
     for i in range(n):
+        x = pow(omega, i, p)
+        assert fft_rep[i] == sum(coeffs[j] * pow(x, j, p) for j in range(d)) % p
+
+
+def test_fft_big2(galois_field, galois_field_roots):
+    # Given
+    d = 20
+    p = galois_field.modulus
+    r = 5
+    n = 2 ** r
+    omega = galois_field_roots[r]
+    coeffs = [galois_field.random().value for _ in range(d)]
+    k = 2 * n // 3
+
+    # When
+    fft_rep = fft2(coeffs, omega, p, n, k)
+
+    # Then
+    assert len(fft_rep) == k
+    for i in range(k):
         x = pow(omega, i, p)
         assert fft_rep[i] == sum(coeffs[j] * pow(x, j, p) for j in range(d)) % p
 
