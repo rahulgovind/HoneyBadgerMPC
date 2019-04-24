@@ -45,3 +45,4 @@ cdef extern from "ntlwrapper.h":
     unsigned char* bytesFromZZ(ZZ x)
     ZZ_p to_ZZ_p(ZZ)
     ZZ to_ZZ "rep"(ZZ_p)
+    int ZZNumBytes "NumBytes"(ZZ)

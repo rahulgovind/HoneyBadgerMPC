@@ -5,7 +5,7 @@
 # classes are used (like ZZ, mat_ZZ_p, etc) and also for NTL function names
 from .ctypes cimport ZZ, ZZ_p, mat_ZZ_p, vec_ZZ_p, ZZ_pX_c
 from .ctypes cimport ZZ_ponv_from_int, mat_ZZ_p_mul, ZZonv_from_int
-from .ctypes cimport ZZFromBytes, bytesFromZZ, to_ZZ_p, to_ZZ
+from .ctypes cimport ZZFromBytes, bytesFromZZ, to_ZZ_p, to_ZZ, ZZNumBytes
 from .objectwrapper cimport ccrepr, ccreadstr
 from .ctypes cimport SetNumThreads, AvailableThreads, ZZ_p_init, ZZ_pX_get_coeff, \
     ZZ_pX_set_coeff, ZZ_pX_eval, SqrRootMod
@@ -18,16 +18,14 @@ cdef ZZ intToZZ(x):
     return ZZFromBytes(x.to_bytes(num, 'little'), num)
 
 cdef ZZToInt(ZZ X):
-    return int.from_bytes(bytesFromZZ(X), 'little')
+    cdef int n = ZZNumBytes(X) + 1
+    return int.from_bytes(bytesFromZZ(X)[:n], 'little')
 
 cdef ZZ_p intToZZp(x):
     return to_ZZ_p(intToZZ(x))
 
 cdef ZZpToInt(ZZ_p X):
-    if int(ccrepr(to_ZZ(X))) != ZZToInt(to_ZZ(X)):
-        print("Not equal ", int(ccrepr(to_ZZ(X))), ZZToInt(to_ZZ(X)))
-    return int(ccrepr(to_ZZ(X)))
-    # return ZZToInt(to_ZZ(X))
+    return ZZToInt(to_ZZ(X))
 
 cdef ZZ py_obj_to_ZZ(object v):
     cdef ZZ result
