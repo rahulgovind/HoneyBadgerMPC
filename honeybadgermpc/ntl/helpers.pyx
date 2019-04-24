@@ -14,10 +14,6 @@ from cython.parallel import parallel, prange
 import time
 from libc.stdlib cimport free
 
-cpdef set_interpolator_matrix(omega, n, p):
-    ZZ_p_init(intToZZ(p))
-    _set_interpolator_matrix(intToZZp(omega), n)
-
 cdef ZZ intToZZ(x):
     num = (x.bit_length() + 7) // 8
     return ZZFromBytes(x.to_bytes(num, 'little'), num)
@@ -344,15 +340,12 @@ def fft_batch_interpolate(zs, ys_list, omega, modulus, int n):
         for j in range(k):
             y_vec_list[i][j] = intToZZp(ys_list[i][j])
 
-    start_time = time.time()
     with nogil, parallel():
 
         ZZ_p_init(zz_modulus)
         for i in prange(n_chunks):
             fnt_decode_step2_c(result_vec_list[i], A, Ad_evals_vec, z_vec, y_vec_list[i],
                                zz_omega, n)
-    end_time = time.time()
-    print("Parallel section: ", end_time - start_time)
     result = [[None] * k for _ in range(n_chunks)]
     for i in range(n_chunks):
         for j in range(k):

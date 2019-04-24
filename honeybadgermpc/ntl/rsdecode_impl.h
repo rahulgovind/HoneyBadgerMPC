@@ -12,8 +12,8 @@ using namespace std;
 
 #define FFT_NAIVE_THRESHOLD 16
 
-map <pair<int, ZZ>, mat_ZZ_p> _interpolators;
-ZZ _interpolator_modulus;
+map <pair<int, ZZ>, mat_ZZ_p> _fft_van_matrices;
+ZZ _fft_van_modulus;
 mutex _interp_mutex;
 
 
@@ -32,7 +32,7 @@ void set_vm_matrix(mat_ZZ_p &result, vec_ZZ_p &x_list, int d)
     }
 }
 
-void _set_interpolator_matrix(ZZ_p omega, int n)
+void _set_fft_vandermonde_matrix(ZZ_p omega, int n)
 {
     vec_ZZ_p x;
     x.SetLength(n);
@@ -43,23 +43,22 @@ void _set_interpolator_matrix(ZZ_p omega, int n)
     mat_ZZ_p interpolator;
     set_vm_matrix(interpolator, x, n);
 
-    _interpolators.emplace(make_pair(make_pair(n, rep(omega)), interpolator));
+    _fft_van_matrices.emplace(make_pair(make_pair(n, rep(omega)), interpolator));
 }
 
-mat_ZZ_p& get_interpolator_matrix(ZZ_p omega, int n)
+mat_ZZ_p& get_fft_vandermonde_matrix(ZZ_p omega, int n)
 {
     lock_guard<mutex> lock(_interp_mutex);
-    if (ZZ_p::modulus() != _interpolator_modulus) {
-        _interpolator_modulus = ZZ_p::modulus();
-        _interpolators.clear();
-        cout << "Clearing modulus" << endl;
+    if (ZZ_p::modulus() != _fft_van_modulus) {
+        _fft_van_modulus = ZZ_p::modulus();
+        _fft_van_matrices.clear();
     }
 
-    if (_interpolators.find(make_pair(n, rep(omega))) == _interpolators.end()) {
-        _set_interpolator_matrix(omega, n);
+    if (_fft_van_matrices.find(make_pair(n, rep(omega))) == _fft_van_matrices.end()) {
+        _set_fft_vandermonde_matrix(omega, n);
     }
 
-    return (_interpolators.find(make_pair(n, rep(omega))))->second;
+    return (_fft_van_matrices.find(make_pair(n, rep(omega))))->second;
 }
 
 void interpolate(vector<ZZ> &result, vector<ZZ> &x, vector<ZZ> &y, ZZ &modulus)
@@ -132,38 +131,6 @@ void _fft(vec_ZZ_p &a, ZZ_p omega, int n, int m=-1,
         mul(a, *van_matrix, a);
         return;
     }
-//    if (interpolator != NULL && interpolator_n == n) {
-//        // If n is small enough, just do naive evaluation instead
-//        // This equates to evaluating polynomial represented by a
-//        // At omega^0, ..., omega^{n-1}
-////        cout << "interpolator_n: " << interpolator_n <<
-////            "\ta length: " << a.length() << "\tomega: " << omega << endl;
-////        cout << "Shape interpolator: " << interpolator.
-//        mul(a, *interpolator, a);
-////        vec_ZZ_p x;
-////        ZZ_pX P;
-////        conv(P, a);
-////        x.SetLength(n);
-////        set(x[0]);
-////        for (int i=1; i < n; i++) {
-////            mul(x[i], x[i-1], omega);
-////        }
-////        eval(a, P, x);
-//        return;
-//    }
-
-//    if (n == 8) {
-//        vec_ZZ_p x;
-//        ZZ_pX P;
-//        conv(P, a);
-//        x.SetLength(n);
-//        set(x[0]);
-//        for (int i=1; i < n; i++) {
-//            mul(x[i], x[i-1], omega);
-//        }
-//        eval(a, P, x);
-//        return;
-//    }
 
     vec_ZZ_p a0, a1;
     a0.SetLength(n / 2);
@@ -207,15 +174,15 @@ void fft(vec_ZZ_p &a, vec_ZZ_p &coeffs, ZZ_p &omega, int n) {
         clear(a[i]);
     }
 
-    mat_ZZ_p *van_inv=NULL;
+    mat_ZZ_p *van_matrix=NULL;
     int van_threshold = FFT_NAIVE_THRESHOLD;
     if (n >= van_threshold) {
         ZZ_p omega_pow;
         power(omega_pow, omega, n / van_threshold);
-        van_inv = &get_interpolator_matrix(omega_pow, van_threshold);
+        van_matrix = &get_fft_vandermonde_matrix(omega_pow, van_threshold);
     }
 
-    _fft(a, omega, n, -1, van_inv, van_threshold);
+    _fft(a, omega, n, -1, van_matrix, van_threshold);
 }
 
 void fft2(vec_ZZ_p &result, vec_ZZ_p &coeffs, ZZ_p &omega, int n, int k) {
@@ -227,15 +194,15 @@ void fft2(vec_ZZ_p &result, vec_ZZ_p &coeffs, ZZ_p &omega, int n, int k) {
     }
 
 
-    mat_ZZ_p *van_inv=NULL;
+    mat_ZZ_p *van_matrix=NULL;
     int van_threshold = FFT_NAIVE_THRESHOLD;
     if (n >= van_threshold) {
         ZZ_p omega_pow;
         power(omega_pow, omega, n / van_threshold);
-        van_inv = &get_interpolator_matrix(omega_pow, van_threshold);
+        van_matrix = &get_fft_vandermonde_matrix(omega_pow, van_threshold);
     }
 
-    _fft(a, omega, n, k, van_inv, van_threshold);
+    _fft(a, omega, n, k, van_matrix, van_threshold);
     result.SetLength(k);
 }
 

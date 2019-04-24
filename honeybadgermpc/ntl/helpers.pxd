@@ -28,5 +28,3 @@ cdef extern from "rsdecode_impl.h":
                                                           vec_ZZ_p y_vec,
                                                           ZZ_p omega,
                                                           int k, int n, int order)
-
-    void _set_interpolator_matrix(ZZ_p omega, int n)
