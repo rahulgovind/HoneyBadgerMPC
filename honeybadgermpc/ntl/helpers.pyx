@@ -23,6 +23,7 @@ cdef ZZToInt(ZZ X):
     cdef unsigned char*b = bytesFromZZ(X)
     result = int.from_bytes(b[:n], 'little')
     free(b)
+    return result
 
 cdef ZZ_p intToZZp(x):
     return to_ZZ_p(intToZZ(x))
