@@ -28,7 +28,7 @@ cdef extern from "ntlwrapper.h":
 
 
     void ZZ_p_init "ZZ_p::init"(ZZ x) nogil
-    void SetNumThreads(int n)
+    void SetNTLNumThreads_c "SetNumThreads"(int n)
     void ZZonv_from_int "conv"(ZZ x, int i)
     void ZZ_ponv_from_int "conv"(ZZ_p x, int i)
     void ZZonv_to_int "conv"(int i, ZZ x)

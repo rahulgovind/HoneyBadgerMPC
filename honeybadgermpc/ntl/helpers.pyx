@@ -7,12 +7,13 @@ from .ctypes cimport ZZ, ZZ_p, mat_ZZ_p, vec_ZZ_p, ZZ_pX_c
 from .ctypes cimport ZZ_ponv_from_int, mat_ZZ_p_mul, ZZonv_from_int
 from .ctypes cimport ZZFromBytes, bytesFromZZ, to_ZZ_p, to_ZZ, ZZNumBytes
 from .objectwrapper cimport ccrepr, ccreadstr
-from .ctypes cimport SetNumThreads, AvailableThreads, ZZ_p_init, ZZ_pX_get_coeff, \
+from .ctypes cimport SetNTLNumThreads_c, AvailableThreads, ZZ_p_init, ZZ_pX_get_coeff, \
     ZZ_pX_set_coeff, ZZ_pX_eval, SqrRootMod
 from cpython.int cimport PyInt_AS_LONG
 from cython.parallel import parallel, prange
 import time
 from libc.stdlib cimport free
+cimport openmp
 
 cdef ZZ intToZZ(x):
     num = (x.bit_length() + 7) // 8
@@ -354,7 +355,7 @@ def fft_batch_interpolate(zs, ys_list, omega, modulus, int n):
     return result
 
 cpdef SetNTLNumThreads(int x):
-    SetNumThreads(x)
+    SetNTLNumThreads_c(x)
 
 cpdef int AvailableNTLThreads():
     return AvailableThreads()
@@ -415,3 +416,11 @@ def sqrt_mod(a, n):
     cdef ZZ x
     SqrRootMod(x, intToZZ(a), intToZZ(n))
     return int(ccrepr(x))
+
+cpdef SetNumThreads(int n):
+    """
+    Set threads for both NTL and OpenMP
+    :param n: Number of threads
+    """
+    SetNTLNumThreads(n)
+    openmp.omp_set_num_threads(n)
