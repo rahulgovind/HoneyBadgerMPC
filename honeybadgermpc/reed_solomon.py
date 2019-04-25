@@ -2,10 +2,11 @@ from honeybadgermpc.ntl.helpers import vandermonde_batch_evaluate, \
     vandermonde_batch_interpolate
 from honeybadgermpc.ntl.helpers import gao_interpolate
 from honeybadgermpc.ntl.helpers import fft, fft_interpolate, fft_batch_interpolate, \
-    fft_batch_evaluate
+    fft_batch_evaluate, GetMaxThreads, SetNumThreads
 from honeybadgermpc.wb_interpolate import make_wb_encoder_decoder
 from honeybadgermpc.exceptions import HoneyBadgerMPCError
 import logging
+import psutil
 
 
 class Encoder(object):
@@ -393,13 +394,69 @@ class EncoderFactory:
                          f"{[Algorithm.VANDERMONDE, Algorithm.FFT]}")
 
 
+class OptimalEncoder(Encoder):
+    def __init__(self, point):
+        self.encoder_van = VandermondeEncoder(point)
+        self.encoder_fft = FFTEncoder(point)
+        self.point = point
+        self.n = point.n
+        self.cores = psutil.cpu_count(logical=False)
+
+    def encode_one(self, data):
+        SetNumThreads(1)
+        if self.n < 64:
+            return self.encoder_van.encode_one(data)
+        else:
+            return self.encoder_fft.encode_one(data)
+
+    def encode_batch(self, data):
+        SetNumThreads(min(len(data), self.cores))
+        if self.n < 64:
+            return self.encoder_van.encode_batch(data)
+        else:
+            if len(data) > self.n * 0.5 * self.cores:
+                return self.encoder_van.encode_batch(data)
+            else:
+                return self.encoder_fft.encode_batch(data)
+
+
+class OptimalDecoder(Decoder):
+    def __init__(self, point):
+        self.decoder_van = VandermondeDecoder(point)
+        self.decoder_fft = FFTDecoder(point)
+        self.point = point
+        self.n = point.n
+        self.cores = psutil.cpu_count(logical=False)
+
+    def decode_one(self, z, data):
+        SetNumThreads(1)
+        if self.n < 8:
+            return self.decoder_van.decode_one(z, data)
+        else:
+            return self.decoder_fft.decode_one(z, data)
+
+    def decode_batch(self, z, data):
+        SetNumThreads(min(len(data), self.cores))
+
+        if self.n < 8:
+            return self.decoder_van.decode_batch(z, data)
+        else:
+            if len(data) > self.n * 0.5 * self.cores:
+                return self.decoder_van.decode_batch(z, data)
+            else:
+                return self.decoder_fft.decode_batch(z, data)
+
+
 class DecoderFactory:
     @staticmethod
-    def get(point, algorithm=Algorithm.VANDERMONDE):
+    def get(point, algorithm=None):
         if algorithm == Algorithm.VANDERMONDE:
             return VandermondeDecoder(point)
         elif algorithm == Algorithm.FFT:
             return FFTDecoder(point)
+        elif algorithm is None and point.use_fft:
+            return OptimalDecoder(point)
+
         raise ValueError(f"Incorrect algorithm. "
                          f"Supported algorithms are "
                          f"{[Algorithm.VANDERMONDE, Algorithm.FFT]}")
@@ -412,6 +469,8 @@ class RobustDecoderFactory:
             return GaoRobustDecoder(t, point)
         elif algorithm == Algorithm.WELCH_BERLEKAMP:
             return WelchBerlekampRobustDecoder(t, point)
+        elif algorithm is None and point.use_fft:
+            return OptimalEncoder(point)
         raise ValueError(f"Invalid algorithm. "
                          f"Supported algorithms are "
                          f"[{Algorithm.GAO},"

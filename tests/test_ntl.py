@@ -1,7 +1,7 @@
 from honeybadgermpc.ntl.helpers import lagrange_interpolate, \
     vandermonde_batch_interpolate, vandermonde_batch_evaluate, \
     fft, fft_interpolate, fft_batch_interpolate, \
-    gao_interpolate, evaluate, sqrt_mod, fft2, fft_batch_evaluate
+    gao_interpolate, evaluate, sqrt_mod, partial_fft, fft_batch_evaluate
 import random
 
 
@@ -103,7 +103,7 @@ def test_fft_batch_evaluate_big(galois_field, galois_field_roots):
                                         for l in range(d)) % p
 
 
-def test_fft_evaluate_big(galois_field, galois_field_roots):
+def test_partial_fft_big(galois_field, galois_field_roots):
     # Given
     d = 20
     p = galois_field.modulus
@@ -114,7 +114,7 @@ def test_fft_evaluate_big(galois_field, galois_field_roots):
     k = 25
 
     # When
-    fft_rep = fft2(coeffs, omega, p, n, k)
+    fft_rep = partial_fft(coeffs, omega, p, n, k)
 
     # Then
     assert len(fft_rep) == k

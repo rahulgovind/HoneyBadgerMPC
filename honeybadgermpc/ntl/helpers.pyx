@@ -267,7 +267,7 @@ cpdef fft(coeffs, omega, modulus, int n):
 
     return result
 
-cpdef fft2(coeffs, omega, modulus, int n, int k):
+cpdef partial_fft(coeffs, omega, modulus, int n, int k):
     cdef int i, d;
     cdef vec_ZZ_p coeffs_vec, result_vec;
 
@@ -284,7 +284,6 @@ cpdef fft2(coeffs, omega, modulus, int n, int k):
     result = [None] * k
     for i in range(k):
         result[i] = ZZpToInt(result_vec[i])
-        # result[i] = int(ccrepr((result_vec[i])))
 
     return result
 
@@ -456,3 +455,6 @@ cpdef SetNumThreads(int n):
     """
     SetNTLNumThreads(n)
     openmp.omp_set_num_threads(n)
+
+cpdef GetMaxThreads():
+    return openmp.omp_get_max_threads()
