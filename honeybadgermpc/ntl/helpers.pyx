@@ -4,14 +4,13 @@
 # PEP8 standards are observed wherever possible but ignored in cases whether NTL
 # classes are used (like ZZ, mat_ZZ_p, etc) and also for NTL function names
 from .ctypes cimport ZZ, ZZ_p, mat_ZZ_p, vec_ZZ_p, ZZ_pX_c
-from .ctypes cimport ZZ_ponv_from_int, mat_ZZ_p_mul, ZZonv_from_int
+from .ctypes cimport mat_ZZ_p_mul
 from .ctypes cimport ZZFromBytes, bytesFromZZ, to_ZZ_p, to_ZZ, ZZNumBytes
 from .objectwrapper cimport ccrepr, ccreadstr
 from .ctypes cimport SetNTLNumThreads_c, AvailableThreads, ZZ_p_init, ZZ_pX_get_coeff, \
     ZZ_pX_set_coeff, ZZ_pX_eval, SqrRootMod
 from cpython.int cimport PyInt_AS_LONG
 from cython.parallel import parallel, prange
-import time
 from libc.stdlib cimport free
 cimport openmp
 
@@ -20,7 +19,7 @@ cdef ZZ intToZZ(x):
     return ZZFromBytes(x.to_bytes(num, 'little'), num)
 
 cdef ZZToInt(ZZ X):
-    cdef int n = ZZNumBytes(X) + 1
+    cdef int n = ZZNumBytes(X)
     cdef unsigned char*b = bytesFromZZ(X)
     result = int.from_bytes(b[:n], 'little')
     free(b)
@@ -178,17 +177,13 @@ cpdef vandermonde_batch_interpolate(x, data_list, modulus):
         for j in range(l, k):
             m[j][i] = intToZZp(0)
     cdef mat_ZZ_p reconstructions
-    end_time = time.time()
     mat_ZZ_p_mul(reconstructions, r, m)
-
-    end_time = time.time()
 
     polynomials = [[None] * k for _ in range(n_chunks)]
 
     for i in range(n_chunks):
         for j in range(k):
             polynomials[i][j] = 0
-    end_time = time.time()
 
     for i in range(n_chunks):
         for j in range(k):
@@ -262,7 +257,6 @@ cpdef fft(coeffs, omega, modulus, int n):
     result = [None] * n
     for i in range(n):
         result[i] = ZZpToInt(result_vec[i])
-        # result[i] = int(ccrepr((result_vec[i])))
 
     return result
 
@@ -278,7 +272,7 @@ cpdef partial_fft(coeffs, omega, modulus, int n, int k):
         coeffs_vec[i] = intToZZp(coeffs[i])
 
     cdef ZZ_p zz_omega = intToZZp(omega)
-    fft2_c(result_vec, coeffs_vec, zz_omega, n, k)
+    fft_partial_c(result_vec, coeffs_vec, zz_omega, n, k)
 
     result = [None] * k
     for i in range(k):
@@ -309,7 +303,7 @@ cpdef fft_batch_evaluate(coeffs, omega, modulus, int n, int k):
     with nogil, parallel():
         ZZ_p_init(zz_modulus)
         for i in prange(batch_size):
-            fft2_c(result_vec_list[i], coeffs_vec_list[i], zz_omega, n, k)
+            fft_partial_c(result_vec_list[i], coeffs_vec_list[i], zz_omega, n, k)
 
     result = [[None] * k for _ in range(batch_size)]
     for i in range(batch_size):

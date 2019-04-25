@@ -29,11 +29,6 @@ cdef extern from "ntlwrapper.h":
 
     void ZZ_p_init "ZZ_p::init"(ZZ x) nogil
     void SetNTLNumThreads_c "SetNumThreads"(int n)
-    void ZZonv_from_int "conv"(ZZ x, int i)
-    void ZZ_ponv_from_int "conv"(ZZ_p x, int i)
-    void ZZonv_to_int "conv"(int i, ZZ x)
-    void ZZonv_from_long "conv"(ZZ x, long l)
-    void ZZonv_to_long "conv"(long l, ZZ x)
     void mat_ZZ_p_mul "mul"(mat_ZZ_p x, mat_ZZ_p a, mat_ZZ_p b)
     void mat_ZZ_p_mul_vec "mul"(vec_ZZ_p x, mat_ZZ_p a, vec_ZZ_p b) nogil
     void ZZ_pX_get_coeff "GetCoeff"(ZZ_p r, ZZ_pX_c x, int i)

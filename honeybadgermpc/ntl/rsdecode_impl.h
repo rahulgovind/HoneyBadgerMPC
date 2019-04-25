@@ -10,7 +10,9 @@
 using namespace NTL;
 using namespace std;
 
-#define FFT_NAIVE_THRESHOLD 16
+// Threshold to decide when to use Vandermonde in _fft
+// Determined experimentally based on minimising time taken by fft
+#define FFT_VAN_THRESHOLD 16
 
 map <pair<int, ZZ>, mat_ZZ_p> _fft_van_matrices;
 ZZ _fft_van_modulus;
@@ -165,7 +167,7 @@ void _fft(vec_ZZ_p &a, ZZ_p omega, int n, int m=-1,
     }
 }
 
-void fft(vec_ZZ_p &a, vec_ZZ_p &coeffs, ZZ_p &omega, int n) {
+void fft(vec_ZZ_p &a, vec_ZZ_p &coeffs, ZZ_p &omega, int n, int k=-1) {
     a.SetLength(n);
     for (unsigned int i=0; i < coeffs.length() && i < n; i++) {
         a[i] = coeffs[i];
@@ -175,27 +177,7 @@ void fft(vec_ZZ_p &a, vec_ZZ_p &coeffs, ZZ_p &omega, int n) {
     }
 
     mat_ZZ_p *van_matrix=NULL;
-    int van_threshold = FFT_NAIVE_THRESHOLD;
-    if (n >= van_threshold) {
-        ZZ_p omega_pow;
-        power(omega_pow, omega, n / van_threshold);
-        van_matrix = &get_fft_vandermonde_matrix(omega_pow, van_threshold);
-    }
-
-    _fft(a, omega, n, -1, van_matrix, van_threshold);
-}
-
-void fft2(vec_ZZ_p &result, vec_ZZ_p &coeffs, ZZ_p &omega, int n, int k) {
-    vec_ZZ_p &a = result;
-    a.SetLength(n);
-
-    for (unsigned int i=0; i < coeffs.length() && i < n; i++) {
-        a[i] = coeffs[i];
-    }
-
-
-    mat_ZZ_p *van_matrix=NULL;
-    int van_threshold = FFT_NAIVE_THRESHOLD;
+    int van_threshold = FFT_VAN_THRESHOLD;
     if (n >= van_threshold) {
         ZZ_p omega_pow;
         power(omega_pow, omega, n / van_threshold);
@@ -203,7 +185,9 @@ void fft2(vec_ZZ_p &result, vec_ZZ_p &coeffs, ZZ_p &omega, int n, int k) {
     }
 
     _fft(a, omega, n, k, van_matrix, van_threshold);
-    result.SetLength(k);
+    if (k != -1) {
+        a.SetLength(k);
+    }
 }
 
 void fnt_decode_step1(ZZ_pX &A, vec_ZZ_p &Ad_evals, vector<int>& zs,
@@ -265,13 +249,12 @@ void fnt_decode_step2(vec_ZZ_p &P_coeffs, ZZ_pX &A, vec_ZZ_p &Ad_evals,
     ZZ_p omega_inv;
     inv(omega_inv, omega);
 
-    fft2(N_rev_evals, N_coeffs, omega_inv, n, (k < n) ? k + 1: n);
+    fft(N_rev_evals, N_coeffs, omega_inv, n, (k < n) ? k + 1: n);
 
     ZZ_pX Q;
     Q.SetMaxLength(k);
     for (int i=0; i < k; i++) {
         SetCoeff(Q, i, -N_rev_evals[(i + 1) % n]);
-//        SetCoeff(Q, i, -N_rev_evals[n - i - 1]);
     }
 
     ZZ_pX P;

@@ -402,7 +402,7 @@ class OptimalEncoder(Encoder):
         # In the worst case, n would be just one above a power of 2. For example, 65
         # The nearest power of 2 greater than this is 128
         # 128 - 65 = 63 > 128 / 4 = 32. This is bad. So we will use vandermonde here.
-        if npow2 - self.n > npow2 // 4 and self.n < 128:
+        if npow2 - self.n > npow2 // 4 and self.n < 128 and len(data) > 256:
             return self.encoder_van.encode_batch(data)
         else:
             return self.encoder_fft.encode_batch(data)

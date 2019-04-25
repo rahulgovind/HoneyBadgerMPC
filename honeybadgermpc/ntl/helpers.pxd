@@ -10,8 +10,8 @@ cdef extern from "rsdecode_impl.h":
     cdef void set_vm_matrix_c "set_vm_matrix"(mat_ZZ_p r, vec_ZZ_p x_list,
                                               int d)
     cdef void fft_c "fft"(vec_ZZ_p r, vec_ZZ_p coeffs, ZZ_p omega, int n)
-    cdef void fft2_c "fft2"(vec_ZZ_p r, vec_ZZ_p coeffs, ZZ_p omega,
-                            int n, int k) nogil
+    cdef void fft_partial_c "fft"(vec_ZZ_p r, vec_ZZ_p coeffs, ZZ_p omega,
+                                  int n, int k) nogil
     cdef void fnt_decode_step1_c "fnt_decode_step1"(ZZ_pX_c A_coeffs,
                                                     vec_ZZ_p Ad_evals,
                                                     vector[int] z,
