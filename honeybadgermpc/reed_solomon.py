@@ -375,25 +375,6 @@ class IncrementalDecoder(object):
         return None, None
 
 
-class Algorithm:
-    VANDERMONDE = 'vandermonde'
-    FFT = 'fft'
-    GAO = 'gao'
-    WELCH_BERLEKAMP = 'welch-berlekamp'
-
-
-class EncoderFactory:
-    @staticmethod
-    def get(point, algorithm=Algorithm.VANDERMONDE):
-        if algorithm == Algorithm.VANDERMONDE:
-            return VandermondeEncoder(point)
-        elif algorithm == Algorithm.FFT:
-            return FFTEncoder(point)
-        raise ValueError(f"Incorrect algorithm. "
-                         f"Supported algorithms are "
-                         f"{[Algorithm.VANDERMONDE, Algorithm.FFT]}")
-
-
 class OptimalEncoder(Encoder):
     def __init__(self, point):
         self.encoder_van = VandermondeEncoder(point)
@@ -404,6 +385,8 @@ class OptimalEncoder(Encoder):
 
     def encode_one(self, data):
         SetNumThreads(1)
+
+        # Parameters determined experimentally
         if self.n < 64:
             return self.encoder_van.encode_one(data)
         else:
@@ -411,6 +394,8 @@ class OptimalEncoder(Encoder):
 
     def encode_batch(self, data):
         SetNumThreads(min(len(data), self.cores))
+
+        # Parameters determined experimentally
         if self.n < 64:
             return self.encoder_van.encode_batch(data)
         else:
@@ -430,6 +415,8 @@ class OptimalDecoder(Decoder):
 
     def decode_one(self, z, data):
         SetNumThreads(1)
+
+        # Parameters determined experimentally
         if self.n < 8:
             return self.decoder_van.decode_one(z, data)
         else:
@@ -438,6 +425,7 @@ class OptimalDecoder(Decoder):
     def decode_batch(self, z, data):
         SetNumThreads(min(len(data), self.cores))
 
+        # Parameters determined experimentally
         if self.n < 8:
             return self.decoder_van.decode_batch(z, data)
         else:
@@ -447,6 +435,33 @@ class OptimalDecoder(Decoder):
                 return self.decoder_fft.decode_batch(z, data)
 
 
+class Algorithm:
+    VANDERMONDE = 'vandermonde'
+    FFT = 'fft'
+    GAO = 'gao'
+    WELCH_BERLEKAMP = 'welch-berlekamp'
+
+
+class EncoderFactory:
+    @staticmethod
+    def get(point, algorithm=None):
+        if algorithm == Algorithm.VANDERMONDE:
+            return VandermondeEncoder(point)
+        elif algorithm == Algorithm.FFT:
+            return FFTEncoder(point)
+        elif algorithm is None:
+            if point.use_fft:
+                return OptimalEncoder(point)
+            else:
+                return VandermondeEncoder(point)
+
+        raise ValueError(f"Incorrect algorithm. "
+                         f"Supported algorithms are "
+                         f"{[Algorithm.VANDERMONDE, Algorithm.FFT]}\n"
+                         f"Pass algorithm=None with FFT Enabled for automatic "
+                         f"selection of encoder")
+
+
 class DecoderFactory:
     @staticmethod
     def get(point, algorithm=None):
@@ -454,12 +469,17 @@ class DecoderFactory:
             return VandermondeDecoder(point)
         elif algorithm == Algorithm.FFT:
             return FFTDecoder(point)
-        elif algorithm is None and point.use_fft:
-            return OptimalDecoder(point)
+        elif algorithm is None:
+            if point.use_fft:
+                return OptimalDecoder(point)
+            else:
+                return VandermondeDecoder(point)
 
         raise ValueError(f"Incorrect algorithm. "
                          f"Supported algorithms are "
-                         f"{[Algorithm.VANDERMONDE, Algorithm.FFT]}")
+                         f"{[Algorithm.VANDERMONDE, Algorithm.FFT]}\n"
+                         f"Pass algorithm=None with FFT Enabled for automatic "
+                         f"selection of decoder")
 
 
 class RobustDecoderFactory:
@@ -469,8 +489,7 @@ class RobustDecoderFactory:
             return GaoRobustDecoder(t, point)
         elif algorithm == Algorithm.WELCH_BERLEKAMP:
             return WelchBerlekampRobustDecoder(t, point)
-        elif algorithm is None and point.use_fft:
-            return OptimalEncoder(point)
+
         raise ValueError(f"Invalid algorithm. "
                          f"Supported algorithms are "
                          f"[{Algorithm.GAO},"

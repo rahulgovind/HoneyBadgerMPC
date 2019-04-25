@@ -2,6 +2,7 @@ import pytest
 from honeybadgermpc.reed_solomon import VandermondeEncoder, FFTEncoder, \
     VandermondeDecoder, FFTDecoder, GaoRobustDecoder, WelchBerlekampRobustDecoder
 from honeybadgermpc.polynomial import EvalPoint
+from honeybadgermpc.reed_solomon import EncoderFactory, DecoderFactory
 
 
 @pytest.fixture
@@ -90,6 +91,24 @@ def test_fft_encode(fft_encoding_test_cases):
         assert actual == encoded
 
 
+def test_auto_encode_fft_disabled(encoding_test_cases):
+    # Just check if some encoder is being picked
+    for test_case in encoding_test_cases:
+        data, encoded, point = test_case
+        enc = EncoderFactory.get(point)
+        actual = enc.encode(data)
+        assert actual == encoded
+
+
+def test_auto_encode_fft_enabled(fft_encoding_test_cases):
+    # Just check if some encoder is being picked
+    for test_case in fft_encoding_test_cases:
+        data, encoded, point = test_case
+        enc = EncoderFactory.get(point)
+        actual = enc.encode(data)
+        assert actual == encoded
+
+
 def test_vandermonde_decode(decoding_test_cases):
     for test_case in decoding_test_cases:
         z, encoded, decoded, point = test_case
@@ -102,6 +121,22 @@ def test_fft_decode(fft_decoding_test_cases):
     for test_case in fft_decoding_test_cases:
         z, encoded, decoded, point = test_case
         dec = FFTDecoder(point)
+        actual = dec.decode(z, encoded)
+        assert actual == decoded
+
+
+def test_auto_decode_fft_disabled(decoding_test_cases):
+    for test_case in decoding_test_cases:
+        z, encoded, decoded, point = test_case
+        dec = DecoderFactory.get(point)
+        actual = dec.decode(z, encoded)
+        assert actual == decoded
+
+
+def test_auto_decode_fft_enabled(fft_decoding_test_cases):
+    for test_case in fft_decoding_test_cases:
+        z, encoded, decoded, point = test_case
+        dec = DecoderFactory.get(point)
         actual = dec.decode(z, encoded)
         assert actual == decoded
 
