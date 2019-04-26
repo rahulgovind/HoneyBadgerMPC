@@ -44,7 +44,7 @@ def test_batch_vandermonde_evaluate(galois_field):
     assert y == [[1, 2], [3, 5]]
 
 
-def test_fft():
+def test_fft_small():
     # Given
     coeffs = [0, 1]
     p = 13

@@ -332,7 +332,6 @@ class IncrementalDecoder(object):
                         del self._available_data[i][error_idx]
             else:
                 break
-
         # We're done
         if self._num_decoded == self.batch_size:
             self._result = self._partial_result

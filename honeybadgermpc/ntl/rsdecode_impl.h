@@ -6,6 +6,7 @@
 #include <iostream>
 #include <map>
 #include <omp.h>
+#include <NTL/vector.h>
 
 using namespace NTL;
 using namespace std;
@@ -15,8 +16,10 @@ using namespace std;
 #define FFT_VAN_THRESHOLD 16
 
 map <pair<int, ZZ>, mat_ZZ_p> _fft_van_matrices;
-ZZ _fft_van_modulus;
-mutex _interp_mutex;
+map <pair<int, ZZ>, vector<pair<vec_ZZ, vec_ZZ>>> _precomputed_butterfly;
+map <int, ZZ_pXModulus> _precomputed_modulus_poly;
+ZZ _global_modulus;
+mutex _global_mutex;
 
 
 void set_vm_matrix(mat_ZZ_p &result, vec_ZZ_p &x_list, int d)
@@ -48,19 +51,80 @@ void _set_fft_vandermonde_matrix(ZZ_p omega, int n)
     _fft_van_matrices.emplace(make_pair(make_pair(n, rep(omega)), interpolator));
 }
 
+void _check_modulus() {
+    // Must hold onto lock while calling this
+    if (ZZ_p::modulus() != _global_modulus) {
+        _global_modulus = ZZ_p::modulus();
+        _fft_van_matrices.clear();
+        _precomputed_butterfly.clear();
+        _precomputed_modulus_poly.clear();
+    }
+}
+
 mat_ZZ_p& get_fft_vandermonde_matrix(ZZ_p omega, int n)
 {
-    lock_guard<mutex> lock(_interp_mutex);
-    if (ZZ_p::modulus() != _fft_van_modulus) {
-        _fft_van_modulus = ZZ_p::modulus();
-        _fft_van_matrices.clear();
-    }
-
+    lock_guard<mutex> lock(_global_mutex);
+    _check_modulus();
     if (_fft_van_matrices.find(make_pair(n, rep(omega))) == _fft_van_matrices.end()) {
         _set_fft_vandermonde_matrix(omega, n);
     }
 
     return (_fft_van_matrices.find(make_pair(n, rep(omega))))->second;
+}
+
+// d is the degree of the given ZZ_pXModulus
+ZZ_pXModulus& get_modulus_poly(int d)
+{
+    lock_guard<mutex> lock(_global_mutex);
+    _check_modulus();
+    int key = d;
+    if (_precomputed_modulus_poly.find(key) == _precomputed_modulus_poly.end()) {
+        ZZ_pX f;
+        f.SetLength(d + 1);
+        SetCoeff(f, d, 1);
+        _precomputed_modulus_poly[key] = ZZ_pXModulus(f);
+    }
+
+    return (_precomputed_modulus_poly.find(key))->second;
+}
+
+vector<pair<vec_ZZ, vec_ZZ>>& get_butterfly(ZZ_p omega, int n)
+{
+    lock_guard<mutex> lock(_global_mutex);
+    _check_modulus();
+
+    unsigned int l = __builtin_ctz(n);
+    pair<int, ZZ> key = make_pair(l, rep(omega));
+
+    if (_precomputed_butterfly.find(key) == _precomputed_butterfly.end()) {
+        // Not found. Precompute now
+        vector<pair<vec_ZZ, vec_ZZ> > res;
+        res.resize(l + 1);
+
+        ZZ modulus = ZZ_p::modulus();
+        for (int i=0; i<= l; i++) {
+            // Level i has powers of omega^(2^i)
+            // Therefore, it has 2^(l - i) elements
+            res[i].first.SetLength(1 << (l - i));
+            res[i].second.SetLength(1 << (l - i));
+
+            ZZ_p p, r;
+            // r = omega^(2^i), p = r^j
+            set(p);
+            power(r, omega, 1 << i);
+
+            unsigned int n_bits_plus_1 = NumBits(modulus) + 1;
+
+            for (int j=0; j < (1 << (l - i)); j++) {
+                res[i].first[j] = rep(p);
+                res[i].second[j] = LeftShift(rep(p), n_bits_plus_1) / modulus;
+                mul(p, p, r);
+            }
+        }
+        _precomputed_butterfly[key] = res;
+    }
+
+    return (_precomputed_butterfly.find(key))->second;
 }
 
 void interpolate(vector<ZZ> &result, vector<ZZ> &x, vector<ZZ> &y, ZZ &modulus)
@@ -167,7 +231,7 @@ void _fft(vec_ZZ_p &a, ZZ_p omega, int n, int m=-1,
     }
 }
 
-void fft(vec_ZZ_p &a, vec_ZZ_p &coeffs, ZZ_p &omega, int n, int k=-1) {
+void fft_recursive(vec_ZZ_p &a, const vec_ZZ_p &coeffs, ZZ_p &omega, int n, int k=-1) {
     a.SetLength(n);
     for (unsigned int i=0; i < coeffs.length() && i < n; i++) {
         a[i] = coeffs[i];
@@ -189,6 +253,158 @@ void fft(vec_ZZ_p &a, vec_ZZ_p &coeffs, ZZ_p &omega, int n, int k=-1) {
         a.SetLength(k);
     }
 }
+
+unsigned reverse_bits(unsigned int n, char k) {
+    n <<= (32 - k);
+    n = (n >> 1) & 0x55555555 | (n << 1) & 0xaaaaaaaa;
+    n = (n >> 2) & 0x33333333 | (n << 2) & 0xcccccccc;
+    n = (n >> 4) & 0x0f0f0f0f | (n << 4) & 0xf0f0f0f0;
+    n = (n >> 8) & 0x00ff00ff | (n << 8) & 0xff00ff00;
+    n = (n >> 16) & 0x0000ffff | (n << 16) & 0xffff0000;
+    return n;
+}
+
+inline void butterfly_shoup(ZZ &x, ZZ &y, const ZZ &w, const ZZ &w2) {
+    static thread_local ZZ x2, y2, t, q;
+    const ZZ &p = ZZ_p::modulus();
+    unsigned int nbits_plus_1;
+
+    nbits_plus_1 = NumBits(p) + 1;
+
+    // x' = x + y
+    add(x2, x, y);
+
+    // if (x' >= p) x' = x' - p
+    if (x2 >= p) {
+        sub(x2, x2, p);
+    }
+
+    // t = x - y
+    sub(t, x, y);
+
+    // if t < 0 then t = t - p;
+    if (t < 0) {
+        add(t, t, p);
+    }
+
+    // q = w' * t / beta
+    mul(q, w2, t);
+    RightShift(q, q, nbits_plus_1);
+
+    // y' = (wt - qp) mod beta
+    mul(t, t, w);
+    mul(y2, q, p);
+    sub(y2, t, y2);
+    trunc(y2, y2, nbits_plus_1);
+
+    // if y' >= p, y' = y' - p
+    if (y2 >= p) {
+        sub(y2, y2, p);
+    }
+
+    swap(y, y2);
+    swap(x, x2);
+}
+
+inline void butterfly_modified(ZZ &x, ZZ &y, const ZZ &w, const ZZ &w2,
+                      const ZZ& p, const ZZ& two_p) {
+    static thread_local ZZ x2, y2, t, q;
+//    const ZZ &p = ZZ_p::modulus();
+    unsigned int nbits_plus_2;
+
+    nbits_plus_2 = NumBits(p) + 2;
+
+    // x' = x + y
+    add(x2, x, y);
+
+    // if (x' >=  2 * p) x' = x' - 2 * p
+    if (x2 >= two_p) {
+        sub(x2, x2, two_p);
+    }
+
+    // t = x - y + 2p
+    sub(t, x, y);
+    add(t, t, two_p);
+
+    // q = w' * t / beta
+    mul(q, w2, t);
+    RightShift(q, q, nbits_plus_2);
+
+    // y' = (wt - qp) mod beta
+    mul(t, t, w);
+    mul(y2, q, p);
+    sub(y2, t, y2);
+    trunc(y2, y2, nbits_plus_2);
+
+    swap(y, y2);
+    swap(x, x2);
+}
+
+void fft(vec_ZZ_p &result, const vec_ZZ_p &coeffs, ZZ_p &omega, int n, int s=-1) {
+    s = (s == -1) ? n : s;
+    ZZ_p temp;
+    ZZ_p z;
+    vec_ZZ x;
+    static thread_local ZZ p, two_p;
+    p = ZZ_p::modulus();
+    mul(two_p, p, 2);
+
+    x.SetLength(n);
+    result.SetMaxLength(s);
+
+    int l = __builtin_ctz(n);
+
+    vector<pair<vec_ZZ, vec_ZZ>>& _precomp = get_butterfly(omega, n);
+
+    for (int i=0; i < coeffs.length(); i++) {
+        x[i] = rep(coeffs[i]);
+    }
+
+    for (int i=1; i <= l; i++) {
+        int m = (1 << (l - i));
+
+        vec_ZZ& w = _precomp[i - 1].first;
+        vec_ZZ& w2 = _precomp[i - 1].second;
+        for (int j=0; j < (1 << (i - 1)); j++) {
+            int t = 2 * j * m;
+
+            for (int k=0; k < m; k++) {
+                butterfly_shoup(x[t + k], x[t + k + m], w[k], w2[k]);
+            }
+        }
+    }
+
+    for (unsigned int i=0; i < n; i++) {
+        unsigned int rev = reverse_bits(i, l);
+        if (rev < s) {
+            result[rev] = to_ZZ_p(x[i]);
+        }
+    }
+}
+//void fft(vec_ZZ_p &result, const vec_ZZ_p &coeffs, ZZ_p &omega, int n, int k=-1) {
+//    ZZ_pX a, b, c;
+//    a.SetMaxLength(n);
+//    b.SetMaxLength(2 * n - 1);
+//
+//    for (int i=0; i < coeffs.length(); i++) {
+//        SetCoeff(a, n - i - 1, coeffs[i]);
+//    }
+//    ZZ_p bi, qi;
+//    set(bi);
+//    set(qi);
+//    for (int i=0; i < 2 * n - 1; i++) {
+//        SetCoeff(b, i, bi);
+//        mul(bi, bi, qi);
+//        mul(qi, qi, omega);
+//    }
+//    mul(c, a, b);
+//    k = (k == -1) ? n: k;
+//    result.SetLength(k);
+//    for (int i=0; i < k; i++) {
+//        result[i] = coeff(c, n + i - 1);
+//        div(result[i], result[i], coeff(b, i));
+//    }
+//}
 
 void fnt_decode_step1(ZZ_pX &A, vec_ZZ_p &Ad_evals, vector<int>& zs,
                       ZZ_p &omega, int n) {
@@ -226,6 +442,9 @@ void fnt_decode_step2(vec_ZZ_p &P_coeffs, ZZ_pX &A, vec_ZZ_p &Ad_evals,
                       vector<int> &zs, vec_ZZ_p& ys, ZZ_p &omega, int n) {
     int k = zs.size();
 
+//    A.SetLength(k);
+    ZZ_pXModulus &F = get_modulus_poly(k + 1);
+
     // Prep for building N
     vec_ZZ_p nis;
     nis.SetLength(k);
@@ -258,9 +477,9 @@ void fnt_decode_step2(vec_ZZ_p &P_coeffs, ZZ_pX &A, vec_ZZ_p &Ad_evals,
     }
 
     ZZ_pX P;
-    mul(P, Q, A);
-
+    MulMod(P, Q, A, F);
     VectorCopy(P_coeffs, P, k);
+
 }
 
 // This combines fnt_decode steps 1 and step 2
