@@ -3,6 +3,9 @@ from honeybadgermpc.reed_solomon import VandermondeEncoder, FFTEncoder, \
     VandermondeDecoder, FFTDecoder, GaoRobustDecoder, WelchBerlekampRobustDecoder
 from honeybadgermpc.polynomial import EvalPoint
 from honeybadgermpc.reed_solomon import EncoderFactory, DecoderFactory
+from honeybadgermpc.reed_solomon import EncoderSelector, DecoderSelector
+from honeybadgermpc.ntl.helpers import AvailableNTLThreads
+from unittest.mock import patch
 
 
 @pytest.fixture
@@ -157,3 +160,95 @@ def test_wb_robust_decode(robust_decoding_test_cases):
         actual, actual_errors = dec.robust_decode(z, encoded)
         assert actual == decoded
         assert actual_errors == expected_errors
+
+
+def test_encoder_selection(galois_field):
+    # Very small n < 8. Vandermonde should always be picked
+    point = EvalPoint(galois_field, 4, use_fft=True)
+    assert isinstance(EncoderSelector.select(point, 1), VandermondeEncoder)
+    assert isinstance(EncoderSelector.select(point, 100000), VandermondeEncoder)
+
+    # Intermediate values of n (8 < n < 128
+    # Bad n (Nearest power of 2 is much higher) Vandermonde should
+    # always be picked
+    point = EvalPoint(galois_field, 65, use_fft=True)
+    assert isinstance(EncoderSelector.select(point, 1), VandermondeEncoder)
+    assert isinstance(EncoderSelector.select(point, 100000), VandermondeEncoder)
+
+    point = EvalPoint(galois_field, 40, use_fft=True)
+    assert isinstance(EncoderSelector.select(point, 1), VandermondeEncoder)
+    assert isinstance(EncoderSelector.select(point, 100000), VandermondeEncoder)
+
+    # Good n (Nearest power of 2 is close) FFT should be picked
+    point = EvalPoint(galois_field, 120, use_fft=True)
+    assert isinstance(EncoderSelector.select(point, 1), FFTEncoder)
+    assert isinstance(EncoderSelector.select(point, 100000), FFTEncoder)
+
+    point = EvalPoint(galois_field, 55, use_fft=True)
+    assert isinstance(EncoderSelector.select(point, 1), FFTEncoder)
+    assert isinstance(EncoderSelector.select(point, 100000), FFTEncoder)
+
+    # Large n. Always pick FFT
+    point = EvalPoint(galois_field, 255, use_fft=True)
+    assert isinstance(EncoderSelector.select(point, 1), FFTEncoder)
+    assert isinstance(EncoderSelector.select(point, 100000), FFTEncoder)
+
+    point = EvalPoint(galois_field, 257, use_fft=True)
+    assert isinstance(EncoderSelector.select(point, 1), FFTEncoder)
+    assert isinstance(EncoderSelector.select(point, 100000), FFTEncoder)
+
+
+@patch('psutil.cpu_count')
+def test_decoder_selection(mocked_cpu_count, galois_field):
+    # Very small n < 8. Vandermonde should always be picked
+    point = EvalPoint(galois_field, 4, use_fft=True)
+    for cpu_count in [1, 100]:
+        mocked_cpu_count.return_value = cpu_count
+        for batch_size in [1, 1000, 100000]:
+            DecoderSelector.set_optimal_thread_count(batch_size)
+            assert isinstance(DecoderSelector.select(point, batch_size),
+                              VandermondeDecoder)
+
+    # Small batches (~n). Reasonable number of threads. Pick FFT
+    point = EvalPoint(galois_field, 65, use_fft=True)
+    for cpu_count in [1, 2, 4, 8]:
+        mocked_cpu_count.return_value = cpu_count
+        for batch_size in [1, 16, 32]:
+            DecoderSelector.set_optimal_thread_count(batch_size)
+            assert isinstance(DecoderSelector.select(point, batch_size),
+                              FFTDecoder)
+
+    # Small n. Reasonable number of threads,
+    # Large batch sizes > ~ numthreads * n. Pick Vandermonde
+    point = EvalPoint(galois_field, 65, use_fft=True)
+    for cpu_count in [1, 2, 4, 8]:
+        mocked_cpu_count.return_value = cpu_count
+        for batch_size in [512, 1024, 2048, 4096]:
+            DecoderSelector.set_optimal_thread_count(batch_size)
+            assert isinstance(DecoderSelector.select(point, batch_size),
+                              VandermondeDecoder)
+
+    # Extremely large n. FFT should ideally be picked at reasonable batch sizes
+    point = EvalPoint(galois_field, 65536, use_fft=True)
+    for cpu_count in [1, 2, 4, 8]:
+        mocked_cpu_count.return_value = cpu_count
+        for batch_size in [512, 1024, 2048, 4096, 8192]:
+            DecoderSelector.set_optimal_thread_count(batch_size)
+            assert isinstance(DecoderSelector.select(point, batch_size),
+                              FFTDecoder)
+
+    # The scenarios above checked extreme cases. Below we check more rigorously based
+    # on the exact approximation formula. Ideally, the cases above should not change
+    # over time but the tests below will as the selection algorithm changes
+    for n in [32, 64, 128, 256]:
+        point = EvalPoint(galois_field, n, use_fft=True)
+        for cpu_count in [2 ** i for i in range(5)]:
+            mocked_cpu_count.return_value = cpu_count
+            for batch_size in [2 ** i for i in range(16)]:
+                DecoderSelector.set_optimal_thread_count(batch_size)
+                if batch_size > 0.5 * n * min(batch_size, AvailableNTLThreads()):
+                    assert isinstance(DecoderSelector.select(point, batch_size),
+                                      VandermondeDecoder)
+                else:
+                    assert isinstance(DecoderSelector.select(point, batch_size),
+                                      FFTDecoder)
