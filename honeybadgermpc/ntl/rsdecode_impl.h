@@ -15,7 +15,9 @@ using namespace std;
 #define FFT_VAN_THRESHOLD 16
 
 map <pair<int, ZZ>, mat_ZZ_p> _fft_van_matrices;
-ZZ _fft_van_modulus;
+map <pair<int, ZZ>, pair<ZZ_pX, vec_ZZ_p>> _precomputed_evaluators;
+map <int, ZZ_pXModulus> _poly_modulus;
+ZZ _global_modulus;
 mutex _interp_mutex;
 
 
@@ -31,6 +33,16 @@ void set_vm_matrix(mat_ZZ_p &result, vec_ZZ_p &x_list, int d)
             result[i][j] = x;
             x = x * x_here;
         }
+    }
+}
+
+void _check_modulus() {
+    // Must hold onto lock while calling this
+    if (ZZ_p::modulus() != _global_modulus) {
+        _global_modulus = ZZ_p::modulus();
+        _fft_van_matrices.clear();
+        _precomputed_evaluators.clear();
+        _poly_modulus.clear();
     }
 }
 
@@ -51,16 +63,51 @@ void _set_fft_vandermonde_matrix(ZZ_p omega, int n)
 mat_ZZ_p& get_fft_vandermonde_matrix(ZZ_p omega, int n)
 {
     lock_guard<mutex> lock(_interp_mutex);
-    if (ZZ_p::modulus() != _fft_van_modulus) {
-        _fft_van_modulus = ZZ_p::modulus();
-        _fft_van_matrices.clear();
-    }
+    _check_modulus();
 
     if (_fft_van_matrices.find(make_pair(n, rep(omega))) == _fft_van_matrices.end()) {
         _set_fft_vandermonde_matrix(omega, n);
     }
 
     return (_fft_van_matrices.find(make_pair(n, rep(omega))))->second;
+}
+
+pair<ZZ_pX, vec_ZZ_p>& get_fft_evaluators(ZZ_p omega,
+        int n)
+{
+    lock_guard<mutex> lock(_interp_mutex);
+    _check_modulus();
+
+    pair<int, ZZ> key = make_pair(n, rep(omega));
+    if (_precomputed_evaluators.find(key) == _precomputed_evaluators.end()) {
+        vec_ZZ_p B, B_inv;
+        B.SetLength(2 * n - 1);
+        B_inv.SetLength(2 * n - 1);
+        ZZ_p b;
+        for (int i=0; i < 2 * n - 1; i++) {
+            power(b, omega, i * (i - 1) / 2);
+            B[i] = b;
+            B_inv[i] = 1 / b;
+        }
+        ZZ_pX B2 = conv<ZZ_pX>(B);
+        _precomputed_evaluators.emplace(make_pair(key, make_pair(B2, B_inv)));
+    }
+    return (_precomputed_evaluators.find(key))->second;
+}
+
+ZZ_pXModulus& get_poly_modulus(int d)
+{
+    lock_guard<mutex> lock(_interp_mutex);
+    _check_modulus();
+    int key = d;
+    if (_poly_modulus.find(key) == _poly_modulus.end()) {
+        ZZ_pX f;
+        f.SetLength(d + 1);
+        SetCoeff(f, d, 1);
+        ZZ_pXModulus F(f);
+        _poly_modulus.emplace(make_pair(key, F));
+    }
+    return (_poly_modulus.find(key))->second;
 }
 
 void interpolate(vector<ZZ> &result, vector<ZZ> &x, vector<ZZ> &y, ZZ &modulus)
@@ -167,7 +214,7 @@ void _fft(vec_ZZ_p &a, ZZ_p omega, int n, int m=-1,
     }
 }
 
-void fft(vec_ZZ_p &a, vec_ZZ_p &coeffs, ZZ_p &omega, int n, int k=-1) {
+void fft_(vec_ZZ_p &a, vec_ZZ_p &coeffs, ZZ_p &omega, int n, int k=-1) {
     a.SetLength(n);
     for (unsigned int i=0; i < coeffs.length() && i < n; i++) {
         a[i] = coeffs[i];
@@ -188,6 +235,26 @@ void fft(vec_ZZ_p &a, vec_ZZ_p &coeffs, ZZ_p &omega, int n, int k=-1) {
     if (k != -1) {
         a.SetLength(k);
     }
+}
+
+void fft(vec_ZZ_p &a, vec_ZZ_p &coeffs, ZZ_p &omega, int n, int k=-1) {
+    k = (k == -1) ? n : k;
+
+    pair<ZZ_pX, vec_ZZ_p>& b = get_fft_evaluators(omega, n);
+    ZZ_pX &B = b.first;
+    ZZ_pX A;
+
+    A.SetLength(n);
+    for (int i=0; i < coeffs.length(); i++) {
+        SetCoeff(A, n - i - 1, coeffs[i] * b.second[i]);
+    }
+
+//    mul(A, A, B);
+    MulTrunc(A, A, B, 2 * n - 1);
+    a.SetLength(k);
+    for (int i=0; i < k; i++) {
+        a[i] = coeff(A, n + i - 1) * b.second[i];
+   }
 }
 
 void fnt_decode_step1(ZZ_pX &A, vec_ZZ_p &Ad_evals, vector<int>& zs,
@@ -258,8 +325,8 @@ void fnt_decode_step2(vec_ZZ_p &P_coeffs, ZZ_pX &A, vec_ZZ_p &Ad_evals,
     }
 
     ZZ_pX P;
-    mul(P, Q, A);
-
+//    mul(P, Q, A);
+    MulTrunc(P, Q, A, k);
     VectorCopy(P_coeffs, P, k);
 }
 
