@@ -1353,87 +1353,87 @@ async def _prog(ctx):
 #     print(end_time - start_time)
 
 
-# if __name__ == "__main__":
-#     n = 5
-#     t = 1
-#     multiprocess = True
-#     _ppe = PreProcessedElements()
-#     logging.info("Generating zeros in sharedata/")
-#     _ppe.generate_zeros(1000, n, t)
-#     logging.info("Generating random shares of bits in sharedata/")
-#     _ppe.generate_random_bits(1000, n, t)
-#     logging.info('Generating random shares in sharedata/')
-#     _ppe.generate_rands(1000, n, t)
-#     logging.info('Generating random shares of triples in sharedata/')
-#     _ppe.generate_triples(1000, n, t)
-#     logging.info("Generating random doubles in sharedata/")
-#     _ppe.generate_double_shares(1000, n, t)
-#
-#     # logging.info('Generating random shares of bits in sharedata/')
-#     # ppe.generate_bits(1000, n, t)
-#
-#     start_time = time.time()
-#     asyncio.set_event_loop(asyncio.new_event_loop())
-#     loop = asyncio.get_event_loop()
-#     try:
-#         config = {MixinOpName.MultiplyShare: BeaverTriple.multiply_shares}
-#         if multiprocess:
-#             from honeybadgermpc.config import HbmpcConfig
-#             from honeybadgermpc.ipc import ProcessProgramRunner
-#
-#
-#             async def _process_prog(peers, n, t, my_id):
-#                 program_runner = ProcessProgramRunner(peers, n, t, my_id,
-#                                                       config)
-#                 await program_runner.start()
-#                 df = pd.read_csv('data.csv')
-#                 del df['Unnamed: 32']
-#
-#                 X = df.iloc[:, 2:].values
-#                 y = np.vectorize(lambda x: 1 if x == 'M' else 0)(df.iloc[:, 1].values)
-#                 x_train, x_test, y_train, y_test = train_test_split(X, y, test_size=0.3,
-#                                                                     random_state=0)
-#
-#                 # Normalize values
-#                 x_train = (x_train - np.mean(x_train, axis=0)) / np.std(x_train, axis=0)
-#                 x_test = (x_test - np.mean(x_test, axis=0)) / np.std(x_test, axis=0)
-#
-#                 program_runner.add(0, _neural_network_mpc_program,
-#                                    x_train=x_train[:64], y_train=y_train[:64],
-#                                    x_test=x_test[:32], y_test=y_test[:32])
-#                 await program_runner.join()
-#                 await program_runner.close()
-#
-#
-#             loop.run_until_complete(_process_prog(
-#                 HbmpcConfig.peers, HbmpcConfig.N, HbmpcConfig.t,
-#                 HbmpcConfig.my_id))
-#         else:
-#             program_runner = TaskProgramRunner(n, t, config)
-#             #
-#             # df = pd.read_csv('data.csv')
-#             # del df['Unnamed: 32']
-#             #
-#             # X = df.iloc[:, 2:].values
-#             # y = np.vectorize(lambda x: 1 if x == 'M' else 0)(df.iloc[:, 1].values)
-#             # x_train, x_test, y_train, y_test = train_test_split(X, y, test_size=0.3,
-#             #                                                     random_state=0)
-#             #
-#             # # Normalize values
-#             # x_train = (x_train - np.mean(x_train, axis=0)) / np.std(x_train, axis=0)
-#             # x_test = (x_test - np.mean(x_test, axis=0)) / np.std(x_test, axis=0)
-#             #
-#             # program_runner.add(_neural_network_mpc_program,
-#             #                    x_train=x_train[:32], y_train=y_train[:32],
-#             #                    x_test=x_test[:32], y_test=y_test[:32])
-#             X = np.random.uniform(0, 10, (15, 3))
-#             y = 9 * X[:, 0] + 4 * X[:, 1] + 7 * X[:, 2] + 2
-#             X = (X - np.mean(X, axis=0)) / np.std(X, axis=0)
-#             program_runner.add(_linear_regression_mpc_program, X=X, y=y)
-#             # program_runner.add(_prog)
-#             loop.run_until_complete(program_runner.join())
-#     finally:
-#         loop.close()
-#
-#     end_time = time.time()
-#     print(end_time - start_time)
+if __name__ == "__main__":
+    n = 5
+    t = 1
+    multiprocess = True
+    _ppe = PreProcessedElements()
+    logging.info("Generating zeros in sharedata/")
+    _ppe.generate_zeros(1000, n, t)
+    logging.info("Generating random shares of bits in sharedata/")
+    _ppe.generate_random_bits(1000, n, t)
+    logging.info('Generating random shares in sharedata/')
+    _ppe.generate_rands(1000, n, t)
+    logging.info('Generating random shares of triples in sharedata/')
+    _ppe.generate_triples(1000, n, t)
+    logging.info("Generating random doubles in sharedata/")
+    _ppe.generate_double_shares(1000, n, t)
+
+    # logging.info('Generating random shares of bits in sharedata/')
+    # ppe.generate_bits(1000, n, t)
+
+    start_time = time.time()
+    asyncio.set_event_loop(asyncio.new_event_loop())
+    loop = asyncio.get_event_loop()
+    try:
+        config = {MixinOpName.MultiplyShare: BeaverTriple.multiply_shares}
+        if multiprocess:
+            from honeybadgermpc.config import HbmpcConfig
+            from honeybadgermpc.ipc import ProcessProgramRunner
+
+
+            async def _process_prog(peers, n, t, my_id):
+                program_runner = ProcessProgramRunner(peers, n, t, my_id,
+                                                      config)
+                await program_runner.start()
+                df = pd.read_csv('data.csv')
+                del df['Unnamed: 32']
+
+                X = df.iloc[:, 2:].values
+                y = np.vectorize(lambda x: 1 if x == 'M' else 0)(df.iloc[:, 1].values)
+                x_train, x_test, y_train, y_test = train_test_split(X, y, test_size=0.3,
+                                                                    random_state=0)
+
+                # Normalize values
+                x_train = (x_train - np.mean(x_train, axis=0)) / np.std(x_train, axis=0)
+                x_test = (x_test - np.mean(x_test, axis=0)) / np.std(x_test, axis=0)
+
+                program_runner.add(0, _neural_network_mpc_program,
+                                   x_train=x_train[:64], y_train=y_train[:64],
+                                   x_test=x_test[:32], y_test=y_test[:32])
+                await program_runner.join()
+                await program_runner.close()
+
+
+            loop.run_until_complete(_process_prog(
+                HbmpcConfig.peers, HbmpcConfig.N, HbmpcConfig.t,
+                HbmpcConfig.my_id))
+        else:
+            program_runner = TaskProgramRunner(n, t, config)
+            #
+            # df = pd.read_csv('data.csv')
+            # del df['Unnamed: 32']
+            #
+            # X = df.iloc[:, 2:].values
+            # y = np.vectorize(lambda x: 1 if x == 'M' else 0)(df.iloc[:, 1].values)
+            # x_train, x_test, y_train, y_test = train_test_split(X, y, test_size=0.3,
+            #                                                     random_state=0)
+            #
+            # # Normalize values
+            # x_train = (x_train - np.mean(x_train, axis=0)) / np.std(x_train, axis=0)
+            # x_test = (x_test - np.mean(x_test, axis=0)) / np.std(x_test, axis=0)
+            #
+            # program_runner.add(_neural_network_mpc_program,
+            #                    x_train=x_train[:32], y_train=y_train[:32],
+            #                    x_test=x_test[:32], y_test=y_test[:32])
+            X = np.random.uniform(0, 10, (15, 3))
+            y = 9 * X[:, 0] + 4 * X[:, 1] + 7 * X[:, 2] + 2
+            X = (X - np.mean(X, axis=0)) / np.std(X, axis=0)
+            program_runner.add(_linear_regression_mpc_program, X=X, y=y)
+            # program_runner.add(_prog)
+            loop.run_until_complete(program_runner.join())
+    finally:
+        loop.close()
+
+    end_time = time.time()
+    print(end_time - start_time)
