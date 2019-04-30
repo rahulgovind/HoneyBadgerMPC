@@ -32,8 +32,9 @@ echo ">>> Command to be executed: '${CMD}'"
 set -x
 rm -f sharedata/READY # NOTE: see preprocessing.py wait_for_preprocessing
 tmux new-session     "${CMD} -d -f ${CONFIG_PATH}.0.json; sh" \; \
-     splitw -h -p 50 "${CMD} -d -f ${CONFIG_PATH}.1.json; sh" \; \
      splitw -v -p 50 "${CMD} -d -f ${CONFIG_PATH}.2.json; sh" \; \
      selectp -t 0 \; \
-     splitw -v -p 50 "${CMD} -d -f ${CONFIG_PATH}.3.json; sh" \; \
-     splitw -v -p 50 "${CMD} -d -f ${CONFIG_PATH}.4.json; sh"
+     splitw -h -p 50 "${CMD} -d -f ${CONFIG_PATH}.1.json; sh" \; \
+     selectp -t 2 \; \
+     splitw -h -p 67 "${CMD} -d -f ${CONFIG_PATH}.3.json; sh" \; \
+     splitw -h -p 50 "${CMD} -d -f ${CONFIG_PATH}.4.json; sh"
