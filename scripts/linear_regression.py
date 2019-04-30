@@ -81,9 +81,16 @@ async def _linear_regression_mpc_program(ctx, X, y):
 
 
 if __name__ == "__main__":
-    n = 5
-    t = 1
-    multiprocess = True
+    from honeybadgermpc.config import HbmpcConfig
+
+    multiprocess = HbmpcConfig.N is not None
+    if HbmpcConfig.N is not None:
+        n = HbmpcConfig.N
+        t = HbmpcConfig.t
+    else:
+        n = 5
+        t = 1
+
     _ppe = PreProcessedElements()
     set_ppe(_ppe)
     logging.info("Generating zeros in sharedata/")
@@ -106,7 +113,6 @@ if __name__ == "__main__":
     try:
         config = {MixinOpName.MultiplyShare: BeaverTriple.multiply_shares}
         if multiprocess:
-            from honeybadgermpc.config import HbmpcConfig
             from honeybadgermpc.ipc import ProcessProgramRunner
 
 
