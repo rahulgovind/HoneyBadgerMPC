@@ -15,7 +15,7 @@ import gc
 
 import traceback
 
-ppe = None
+_ppe = None
 
 F = 32
 KAPPA = 32
@@ -26,6 +26,8 @@ USE_RANDOM_BIT_PPE = True
 random_lock = threading.Lock()
 
 open_array_counter = 0
+TIME = False
+DEBUG = False
 
 
 async def _deterministic_gather(*args):
@@ -46,7 +48,8 @@ async def open_single(ctx, x, t=None):
 async def open_array(ctx, arr, t=None):
     global open_array_counter
     open_array_counter += 1
-    print(f"open_array {open_array_counter}: {len(list(arr))}")
+    if DEBUG:
+        print(f"open_array {open_array_counter}: {len(list(arr))}")
     return await ctx.ShareArray(list(arr), t).open()
 
 
@@ -56,7 +59,7 @@ async def open_nd_array(ctx, arr, t=None):
 
 async def reduce_single(ctx, x):
     x = ctx.Share(x, 2 * ctx.t)
-    r_t, r_2t = ppe.get_double_share(ctx)
+    r_t, r_2t = _ppe.get_double_share(ctx)
     diff = await (x - r_2t).open()
     return diff + r_t.v
 
@@ -64,11 +67,11 @@ async def reduce_single(ctx, x):
 async def reduce_array(ctx, arr):
     r_t, r_2t = [], []
     for _ in range(len(arr)):
-        r_t_, r_2t_ = ppe.get_double_share(ctx)
+        r_t_, r_2t_ = _ppe.get_double_share(ctx)
         r_t.append(r_t_.v)
         r_2t.append(r_2t_.v)
-
     diff = await open_array(ctx, list(map(lambda x, y: x - y, arr, r_2t)), 2 * ctx.t)
+
     return list(map(lambda x, y: x + y, diff, r_t))
 
 
@@ -94,9 +97,9 @@ async def trunc_pr_single(ctx, x, k, m):
 
 async def random_bit_share(ctx):
     if USE_RANDOM_BIT_PPE:
-        return ppe.get_random_bit(ctx)
+        return _ppe.get_random_bit(ctx)
     else:
-        r = ppe.get_rand(ctx)
+        r = _ppe.get_rand(ctx)
         r_square = await (r * r)
         r_sq = await r_square.open()
 
@@ -109,7 +112,7 @@ async def random_bit_share(ctx):
 
 async def random_bit_shares(ctx, n):
     if USE_RANDOM_BIT_PPE:
-        return ppe.get_random_bits(ctx, n)
+        return _ppe.get_random_bits(ctx, n)
     else:
         raise NotImplementedError
 
@@ -319,7 +322,8 @@ async def get_carry_bits(ctx, a_bits, b_bits, low_carry_bit=1):
         temp2 = await reduce_nd_array(ctx, temp2)
         carry_bits, all_one_bits = temp1, temp2
         end_time = time.time()
-        print(f"get_carry_bits: Iteration {iter} took {end_time - start_time}s")
+        if TIME:
+            print(f"get_carry_bits: Iteration {iter} took {end_time - start_time}s")
         iter += 1
     carry_bits = await reduce_nd_array(ctx, carry_bits)
     return carry_bits.flatten()
@@ -332,12 +336,6 @@ async def bit_ltl(ctx, a, b_bits):
     """
     b_bits = [ctx.Share(Field(1) - bi.v) for bi in b_bits]
     a_bits = [ctx.Share(ai) for ai in binary_repr(int(a), len(b_bits))]
-
-    a_bits_opened = [(await a_bit.open()) for a_bit in a_bits]
-    # print("a: ", a_bits_opened)
-
-    b_bits_opened = [(await b_bit.open()) for b_bit in b_bits]
-    # print("b: ", b_bits_opened)
 
     carry = await get_carry_bit(ctx, a_bits, b_bits)
     return ctx.Share(Field(1) - carry.v)
@@ -386,7 +384,8 @@ async def bit_ltl_array(ctx, a, b):
 
     carry_bits = await get_carry_bits(ctx, a_bits.T, b_bits.T)
     end_time = time.time()
-    print(f"bit_ltl_array took {end_time - start_time}s")
+    if TIME:
+        print(f"bit_ltl_array took {end_time - start_time}s")
     return np.array(ctx.field(1)) - carry_bits
 
 
@@ -550,7 +549,7 @@ async def reciprocal(ctx, arr, k, f):
 
     x = await trunc_pr_nd_array(ctx, x, 2 * k, f2)
 
-    print("Theta: ", theta)
+    # print("Theta: ", theta)
     for _ in range(theta):
         dx = await reduce_nd_array(ctx, (one_2f - arr_normalized * x))
         dx = await trunc_pr_nd_array(ctx, dx, 2 * k, f2)
@@ -575,7 +574,7 @@ class FixedPoint(object):
     def __init__(self, ctx, x):
         self.ctx = ctx
         if type(x) in [int, float]:
-            self.share = ppe.get_zero(ctx) + ctx.Share(int(x * 2 ** F))
+            self.share = _ppe.get_zero(ctx) + ctx.Share(int(x * 2 ** F))
         elif type(x) is ctx.Share:
             self.share = x
         else:
@@ -642,7 +641,7 @@ class SuperFixedPoint(object):
         self.ctx = ctx
         if type(x) in [int, float]:
             self.data = asyncio.Future()
-            self.data.set_result(ppe.get_zero(ctx).v + to_fixed_point_repr(x))
+            self.data.set_result(_ppe.get_zero(ctx).v + to_fixed_point_repr(x))
             self.is_future = False
         elif type(x) is ctx.Share:
             self.data = asyncio.Future()
@@ -750,7 +749,7 @@ class FixedPointNDArray(object):
         self.ctx = ctx
         if type(x) in [int, float]:
             self.data = asyncio.Future()
-            self.data.set_result(ppe.get_zero(ctx).v + to_fixed_point_repr(x))
+            self.data.set_result(_ppe.get_zero(ctx).v + to_fixed_point_repr(x))
             self.is_future = False
         if type(x) is asyncio.Future:
             assert shape is not None
@@ -759,7 +758,7 @@ class FixedPointNDArray(object):
             self.shape = shape
         else:
             def convert(z):
-                return ppe.get_zero(ctx).v + ctx.field(to_fixed_point_repr(z))
+                return _ppe.get_zero(ctx).v + ctx.field(to_fixed_point_repr(z))
 
             convert = np.vectorize(convert)
 
@@ -916,7 +915,7 @@ class FixedPointNDArray(object):
 
         def reciprocal_callback(_):
             # Time to evaluate reciprocal!
-            print(_)
+            # print(_)
             inv = asyncio.ensure_future(reciprocal(self.ctx,
                                                    self.data.result().flatten(),
                                                    K, F))
@@ -1042,6 +1041,17 @@ class FixedPointNDArray(object):
             broadcast_shape = self.shape[:axis] + (1,) + self.shape[axis + 1:]
             diff = (self - self.mean(axis=axis).reshape(broadcast_shape))
             return (diff * diff).mean(axis=axis)
+
+    def __getitem__(self, item):
+        new_shape = np.zeros(self.shape)[item].shape
+
+        res = FixedPointNDArray(self.ctx, asyncio.Future(), new_shape)
+
+        def set_result_callback(_):
+            res.data.set_result(self.data.result()[item])
+
+        self.data.add_done_callback(set_result_callback)
+        return res
 
 
 def concatenate(ctx, arr, axis=0):
@@ -1241,7 +1251,7 @@ def accuracy(y_pred, y_actual):
 async def _neural_network_mpc_program(ctx, x_train, y_train, x_test, y_test):
     # Currently, normalization is done in a non-MPC fashion. However, this shouldn't be
     # the case since normalization is a global operation.
-    nn = NeuralNetwork(10, 0.2, 2)
+    nn = NeuralNetwork(12, 0.24, 2)
     x_train = FixedPointNDArray(ctx, x_train)
     y_train = FixedPointNDArray(ctx, y_train.reshape(-1, 1))
     await nn.fit(ctx, x_train, y_train)
@@ -1258,6 +1268,11 @@ async def _linear_regression_mpc_program(ctx, X, y):
     """
     theta = await linear_regression_mpc(ctx, X, y.reshape(-1, 1), epochs=50,
                                         learning_rate=0.05)
+
+
+def set_ppe(v):
+    global _ppe
+    _ppe = v
 
 
 async def _prog(ctx):
@@ -1277,88 +1292,148 @@ async def _prog(ctx):
     # print(await b.open())
     # print(await b.open())
 
+#
+# if __name__ == "__main__":
+#     n = 5
+#     t = 1
+#     multiprocess = True
+#     ppe = PreProcessedElements()
+#     set_ppe(ppe)
+#     logging.info("Generating zeros in sharedata/")
+#     _ppe.generate_zeros(1000, n, t)
+#     logging.info("Generating random shares of bits in sharedata/")
+#     _ppe.generate_random_bits(1000, n, t)
+#     logging.info('Generating random shares in sharedata/')
+#     _ppe.generate_rands(1000, n, t)
+#     logging.info('Generating random shares of triples in sharedata/')
+#     _ppe.generate_triples(1000, n, t)
+#     logging.info("Generating random doubles in sharedata/")
+#     _ppe.generate_double_shares(1000, n, t)
+#
+#     # logging.info('Generating random shares of bits in sharedata/')
+#     # ppe.generate_bits(1000, n, t)
+#
+#     start_time = time.time()
+#     asyncio.set_event_loop(asyncio.new_event_loop())
+#     loop = asyncio.get_event_loop()
+#     try:
+#         config = {MixinOpName.MultiplyShare: BeaverTriple.multiply_shares}
+#         if multiprocess:
+#             from honeybadgermpc.config import HbmpcConfig
+#             from honeybadgermpc.ipc import ProcessProgramRunner
+#
+#
+#             async def _process_prog(peers, n, t, my_id):
+#                 program_runner = ProcessProgramRunner(peers, n, t, my_id,
+#                                                       config)
+#                 await program_runner.start()
+#                 # X = uniform_random(0, 10, (5, 3), seed=0)
+#                 # y = 9 * X[:, 0] + 4 * X[:, 1] + 7 * X[:, 2] + 2
+#
+#                 program_runner.add(0, _prog)
+#
+#                 await program_runner.join()
+#                 await program_runner.close()
+#
+#
+#             loop.run_until_complete(_process_prog(
+#                 HbmpcConfig.peers, HbmpcConfig.N, HbmpcConfig.t,
+#                 HbmpcConfig.my_id))
+#         else:
+#             program_runner = TaskProgramRunner(n, t, config)
+#             X = np.random.uniform(0, 10, (15, 3))
+#             y = 9 * X[:, 0] + 4 * X[:, 1] + 7 * X[:, 2] + 2
+#             X = (X - np.mean(X, axis=0)) / np.std(X, axis=0)
+#             program_runner.add(_linear_regression_mpc_program, X=X, y=y)
+#             loop.run_until_complete(program_runner.join())
+#     finally:
+#         loop.close()
+#
+#     end_time = time.time()
+#     print(end_time - start_time)
 
-if __name__ == "__main__":
-    n = 5
-    t = 1
-    multiprocess = True
-    ppe = PreProcessedElements()
-    logging.info("Generating zeros in sharedata/")
-    ppe.generate_zeros(1000, n, t)
-    logging.info("Generating random shares of bits in sharedata/")
-    ppe.generate_random_bits(1000, n, t)
-    logging.info('Generating random shares in sharedata/')
-    ppe.generate_rands(1000, n, t)
-    logging.info('Generating random shares of triples in sharedata/')
-    ppe.generate_triples(1000, n, t)
-    logging.info("Generating random doubles in sharedata/")
-    ppe.generate_double_shares(1000, n, t)
 
-    # logging.info('Generating random shares of bits in sharedata/')
-    # ppe.generate_bits(1000, n, t)
-
-    start_time = time.time()
-    asyncio.set_event_loop(asyncio.new_event_loop())
-    loop = asyncio.get_event_loop()
-    try:
-        config = {MixinOpName.MultiplyShare: BeaverTriple.multiply_shares}
-        if multiprocess:
-            from honeybadgermpc.config import HbmpcConfig
-            from honeybadgermpc.ipc import ProcessProgramRunner
-
-
-            async def _process_prog(peers, n, t, my_id):
-                program_runner = ProcessProgramRunner(peers, n, t, my_id,
-                                                      config)
-                await program_runner.start()
-                df = pd.read_csv('data.csv')
-                del df['Unnamed: 32']
-
-                X = df.iloc[:, 2:].values
-                y = np.vectorize(lambda x: 1 if x == 'M' else 0)(df.iloc[:, 1].values)
-                x_train, x_test, y_train, y_test = train_test_split(X, y, test_size=0.3,
-                                                                    random_state=0)
-
-                # Normalize values
-                x_train = (x_train - np.mean(x_train, axis=0)) / np.std(x_train, axis=0)
-                x_test = (x_test - np.mean(x_test, axis=0)) / np.std(x_test, axis=0)
-
-                program_runner.add(0, _neural_network_mpc_program,
-                                   x_train=x_train[:32], y_train=y_train[:32],
-                                   x_test=x_test[:32], y_test=y_test[:32])
-                await program_runner.join()
-                await program_runner.close()
-
-
-            loop.run_until_complete(_process_prog(
-                HbmpcConfig.peers, HbmpcConfig.N, HbmpcConfig.t,
-                HbmpcConfig.my_id))
-        else:
-            program_runner = TaskProgramRunner(n, t, config)
-            #
-            # df = pd.read_csv('data.csv')
-            # del df['Unnamed: 32']
-            #
-            # X = df.iloc[:, 2:].values
-            # y = np.vectorize(lambda x: 1 if x == 'M' else 0)(df.iloc[:, 1].values)
-            # x_train, x_test, y_train, y_test = train_test_split(X, y, test_size=0.3,
-            #                                                     random_state=0)
-            #
-            # # Normalize values
-            # x_train = (x_train - np.mean(x_train, axis=0)) / np.std(x_train, axis=0)
-            # x_test = (x_test - np.mean(x_test, axis=0)) / np.std(x_test, axis=0)
-            #
-            # program_runner.add(_neural_network_mpc_program,
-            #                    x_train=x_train[:32], y_train=y_train[:32],
-            #                    x_test=x_test[:32], y_test=y_test[:32])
-            X = np.random.uniform(0, 10, (15, 3))
-            y = 9 * X[:, 0] + 4 * X[:, 1] + 7 * X[:, 2] + 2
-            X = (X - np.mean(X, axis=0)) / np.std(X, axis=0)
-            program_runner.add(_linear_regression_mpc_program, X=X, y=y)
-            # program_runner.add(_prog)
-            loop.run_until_complete(program_runner.join())
-    finally:
-        loop.close()
-
-    end_time = time.time()
-    print(end_time - start_time)
+# if __name__ == "__main__":
+#     n = 5
+#     t = 1
+#     multiprocess = True
+#     _ppe = PreProcessedElements()
+#     logging.info("Generating zeros in sharedata/")
+#     _ppe.generate_zeros(1000, n, t)
+#     logging.info("Generating random shares of bits in sharedata/")
+#     _ppe.generate_random_bits(1000, n, t)
+#     logging.info('Generating random shares in sharedata/')
+#     _ppe.generate_rands(1000, n, t)
+#     logging.info('Generating random shares of triples in sharedata/')
+#     _ppe.generate_triples(1000, n, t)
+#     logging.info("Generating random doubles in sharedata/")
+#     _ppe.generate_double_shares(1000, n, t)
+#
+#     # logging.info('Generating random shares of bits in sharedata/')
+#     # ppe.generate_bits(1000, n, t)
+#
+#     start_time = time.time()
+#     asyncio.set_event_loop(asyncio.new_event_loop())
+#     loop = asyncio.get_event_loop()
+#     try:
+#         config = {MixinOpName.MultiplyShare: BeaverTriple.multiply_shares}
+#         if multiprocess:
+#             from honeybadgermpc.config import HbmpcConfig
+#             from honeybadgermpc.ipc import ProcessProgramRunner
+#
+#
+#             async def _process_prog(peers, n, t, my_id):
+#                 program_runner = ProcessProgramRunner(peers, n, t, my_id,
+#                                                       config)
+#                 await program_runner.start()
+#                 df = pd.read_csv('data.csv')
+#                 del df['Unnamed: 32']
+#
+#                 X = df.iloc[:, 2:].values
+#                 y = np.vectorize(lambda x: 1 if x == 'M' else 0)(df.iloc[:, 1].values)
+#                 x_train, x_test, y_train, y_test = train_test_split(X, y, test_size=0.3,
+#                                                                     random_state=0)
+#
+#                 # Normalize values
+#                 x_train = (x_train - np.mean(x_train, axis=0)) / np.std(x_train, axis=0)
+#                 x_test = (x_test - np.mean(x_test, axis=0)) / np.std(x_test, axis=0)
+#
+#                 program_runner.add(0, _neural_network_mpc_program,
+#                                    x_train=x_train[:64], y_train=y_train[:64],
+#                                    x_test=x_test[:32], y_test=y_test[:32])
+#                 await program_runner.join()
+#                 await program_runner.close()
+#
+#
+#             loop.run_until_complete(_process_prog(
+#                 HbmpcConfig.peers, HbmpcConfig.N, HbmpcConfig.t,
+#                 HbmpcConfig.my_id))
+#         else:
+#             program_runner = TaskProgramRunner(n, t, config)
+#             #
+#             # df = pd.read_csv('data.csv')
+#             # del df['Unnamed: 32']
+#             #
+#             # X = df.iloc[:, 2:].values
+#             # y = np.vectorize(lambda x: 1 if x == 'M' else 0)(df.iloc[:, 1].values)
+#             # x_train, x_test, y_train, y_test = train_test_split(X, y, test_size=0.3,
+#             #                                                     random_state=0)
+#             #
+#             # # Normalize values
+#             # x_train = (x_train - np.mean(x_train, axis=0)) / np.std(x_train, axis=0)
+#             # x_test = (x_test - np.mean(x_test, axis=0)) / np.std(x_test, axis=0)
+#             #
+#             # program_runner.add(_neural_network_mpc_program,
+#             #                    x_train=x_train[:32], y_train=y_train[:32],
+#             #                    x_test=x_test[:32], y_test=y_test[:32])
+#             X = np.random.uniform(0, 10, (15, 3))
+#             y = 9 * X[:, 0] + 4 * X[:, 1] + 7 * X[:, 2] + 2
+#             X = (X - np.mean(X, axis=0)) / np.std(X, axis=0)
+#             program_runner.add(_linear_regression_mpc_program, X=X, y=y)
+#             # program_runner.add(_prog)
+#             loop.run_until_complete(program_runner.join())
+#     finally:
+#         loop.close()
+#
+#     end_time = time.time()
+#     print(end_time - start_time)

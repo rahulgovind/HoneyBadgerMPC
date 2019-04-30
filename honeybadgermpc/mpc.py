@@ -105,7 +105,8 @@ class Mpc(object):
                                     self.field.modulus, sharearray.t, self.N, self.myid,
                                     _send, _recv,
                                     config=self.config.get(ConfigVars.Reconstruction),
-                                    debug=True)
+                                    debug=True,
+                                    max_errors=self.t)
         self._openings[shareid] = opening
         return opening
 

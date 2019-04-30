@@ -91,10 +91,10 @@ def list_transpose(lst):
 
 
 async def incremental_decode(receivers, encoder, decoder, robust_decoder, batch_size, t,
-                             n):
+                             n, max_errors):
     inc_decoder = IncrementalDecoder(encoder, decoder, robust_decoder,
                                      degree=t, batch_size=batch_size,
-                                     max_errors=t)
+                                     max_errors=max_errors)
 
     async for idx, d in fetch_one(receivers):
         inc_decoder.add(idx, d)
@@ -105,7 +105,7 @@ async def incremental_decode(receivers, encoder, decoder, robust_decoder, batch_
 
 
 async def batch_reconstruct(secret_shares, p, t, n, myid, send, recv, config=None,
-                            use_fft=False, debug=False):
+                            use_fft=False, debug=False, max_errors=None):
     """
     args:
       shared_secrets: an array of points representing shared secrets S1 - SB
@@ -123,7 +123,7 @@ async def batch_reconstruct(secret_shares, p, t, n, myid, send, recv, config=Non
 
     Reconstruction takes places in chunks of t+1 values
     """
-
+    max_errors = t if max_errors is None else max_errors
     fp = GF.get(p)
     secret_shares = [v.value for v in secret_shares]
     round1_chunks = to_chunks(secret_shares, t + 1)
@@ -165,7 +165,7 @@ async def batch_reconstruct(secret_shares, p, t, n, myid, send, recv, config=Non
     # Step 2: Attempt to reconstruct P1
     start_time = time.time()
     recons_r2 = await incremental_decode(data_r1, enc, dec, robust_dec,
-                                         num_chunks, t, n)
+                                         num_chunks, t, n, max_errors)
     if recons_r2 is None:
         logging.error("[BatchReconstruct] P1 reconstruction failed!")
         return None
@@ -187,7 +187,7 @@ async def batch_reconstruct(secret_shares, p, t, n, myid, send, recv, config=Non
     # Step 4: Attempt to reconstruct R2
     start_time = time.time()
     recons_p = await incremental_decode(data_r2, enc, dec, robust_dec,
-                                        num_chunks, t, n)
+                                        num_chunks, t, n, max_errors)
     if recons_p is None:
         logging.error("[BatchReconstruct] P2 reconstruction failed!")
         return None
