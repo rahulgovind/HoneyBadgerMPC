@@ -28,4 +28,5 @@ services:
       - ./pairing/setup.py:/usr/src/HoneyBadgerMPC/pairing/setup.py
       - /usr/src/HoneyBadgerMPC/honeybadgermpc/ntl  # Directory _not_ mounted from host
       - ./notebooks:/usr/src/HoneyBadgerMPC/notebooks
+      - ./data:/usr/src/HoneyBadgerMPC/data
     command: pytest -v --cov=honeybadgermpc
