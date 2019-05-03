@@ -8,7 +8,7 @@ from sklearn.model_selection import train_test_split
 import pandas as pd
 import gc
 from honeybadgermpc.fixedpoint import FixedPointNDArray, concatenate, uniform_random, \
-    set_ppe, sigmoid, sigmoid_deriv, relu_init
+    set_ppe, sigmoid, sigmoid_deriv, xavier_init
 
 
 class NeuralNetwork(object):
@@ -21,9 +21,9 @@ class NeuralNetwork(object):
         self.input_size = X.shape[1]
         self.output_size = y.shape[0]
 
-        self.w1 = FixedPointNDArray(ctx, relu_init((self.input_size,
-                                                    self.hidden_size), seed=0))
-        self.w2 = FixedPointNDArray(ctx, relu_init((self.hidden_size, 1), seed=1))
+        self.w1 = FixedPointNDArray(ctx, xavier_init((self.input_size,
+                                                      self.hidden_size), seed=0))
+        self.w2 = FixedPointNDArray(ctx, xavier_init((self.hidden_size, 1), seed=1))
 
         for epoch in range(self.epochs):
             start_time = time.time()

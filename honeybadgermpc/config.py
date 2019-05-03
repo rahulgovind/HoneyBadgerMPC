@@ -13,6 +13,7 @@ Sample config can be found at: conf/sample.ini
 from argparse import ArgumentParser
 import json
 from honeybadgermpc.reed_solomon import Algorithm as RSAlgorithm
+import os
 
 
 class NodeDetails(object):
@@ -78,6 +79,9 @@ class HbmpcConfig(object):
             type=str,
             dest='config_file_path',
             help='Path from where to load the HBMPC config file.')
+
+        if 'HBMPC_LATENCY' in os.environ:
+            HbmpcConfig.latency = float(os.environ['HBMPC_LATENCY'])
 
         args = parser.parse_args()
 
