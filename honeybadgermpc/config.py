@@ -58,6 +58,7 @@ class HbmpcConfig(object):
     skip_preprocessing = False
     extras = None
     reconstruction = None
+    latency = 0.00
 
     @staticmethod
     def load_config():

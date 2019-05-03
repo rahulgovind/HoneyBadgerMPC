@@ -8,7 +8,7 @@ from sklearn.model_selection import train_test_split
 import pandas as pd
 import gc
 from honeybadgermpc.fixedpoint import FixedPointNDArray, concatenate, uniform_random, \
-    set_ppe, sigmoid, sigmoid_deriv
+    set_ppe, sigmoid, sigmoid_deriv, relu_init
 
 
 class NeuralNetwork(object):
@@ -21,12 +21,9 @@ class NeuralNetwork(object):
         self.input_size = X.shape[1]
         self.output_size = y.shape[0]
 
-        self.w1 = FixedPointNDArray(ctx, uniform_random(0, 1, (self.input_size,
-                                                               self.hidden_size),
-                                                        seed=0))
-        self.w2 = FixedPointNDArray(ctx, uniform_random(0, 1,
-                                                        (self.hidden_size, 1),
-                                                        seed=1))
+        self.w1 = FixedPointNDArray(ctx, relu_init((self.input_size,
+                                                    self.hidden_size), seed=0))
+        self.w2 = FixedPointNDArray(ctx, relu_init((self.hidden_size, 1), seed=1))
 
         for epoch in range(self.epochs):
             start_time = time.time()
@@ -41,7 +38,11 @@ class NeuralNetwork(object):
             print(f"First layer linear operations took {end_time2 - start_time2}s")
 
             start_time2 = time.time()
+            # y1_gt_0 = y1 > 0
+            # await y1_gt_0.resolve()
+
             l1 = await sigmoid(y1)
+            # l1 = y1_gt_0 * y1
             await l1.resolve()
             end_time2 = time.time()
             print(f"First layer non-linear ops took {end_time2 - start_time2}s")
@@ -51,8 +52,10 @@ class NeuralNetwork(object):
             y2 = l1 @ self.w2
             await y2.resolve()
 
+            # y2_gt_0 = y2 > 0
+            # await y2_gt_0.resolve()
             l2 = await sigmoid(y2)
-
+            # l2 = y2_gt_0 * y2
             await l2.resolve()
             gc.collect()
 
@@ -64,8 +67,10 @@ class NeuralNetwork(object):
 
             print(f"--------------- Starting back-propagation ---------------")
             l2_delta = err * sigmoid_deriv(l2)
+            # l2_delta = err * y2_gt_0
             await l2_delta.resolve()
             l1_delta = (l2_delta @ self.w2.T) * sigmoid_deriv(l1)
+            # l1_delta = (l2_delta @ self.w2.T) * y1_gt_0
             await l1_delta.open()
             gc.collect()
 
@@ -80,6 +85,15 @@ class NeuralNetwork(object):
             print(f"Epoch took {end_time - start_time}")
 
     async def evaluate(self, x):
+        # y1 = x @ self.w1
+        # await y1.resolve()
+        # y1_gt_0 = (y1 > 0)
+        # l1 = y1_gt_0 * y1
+        # y2 = l1 @ self.w2
+
+        # y2_gt_0 = (y2 > 0)
+        # await y2_gt_0.resolve()
+        # l2 = y2_gt_0 * y2
         l1 = await sigmoid(x @ self.w1)
         l2 = await sigmoid(l1 @ self.w2)
         return (l2 > 0.5)

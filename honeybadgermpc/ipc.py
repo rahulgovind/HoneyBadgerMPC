@@ -7,10 +7,13 @@ from .mpc import Mpc
 from .config import HbmpcConfig, ConfigVars
 from .program_runner import ProgramRunner
 from .preprocessing import wait_for_preprocessing, preprocessing_done
-
+import os
+import time
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.ERROR)
+
+
 # Uncomment this when you want logs from this file.
 # logger.setLevel(logging.NOTSET)
 
@@ -146,6 +149,7 @@ class Listener(object):
             except asyncio.CancelledError:
                 logger.warning("handle_client was cancelled.")
                 return
+
         task.add_done_callback(cb)
 
         logger.debug(f"Received new connection {writer.get_extra_info('peername')}")
@@ -217,13 +221,20 @@ class ProcessProgramRunner(ProgramRunner):
         self.programs = []
         self.config = config
         self.config[ConfigVars.Reconstruction] = HbmpcConfig.reconstruction
+        print("Setup")
+        if HbmpcConfig.latency is not None:
+            self.latency = HbmpcConfig.latency
+            print("Inserting latency: ", self.latency)
+        else:
+            print("No latency inserted")
+            self.latency = 0.00
 
     def get_send_and_recv(self, sid):
         listener_queue = self.listener.get_program_queue(sid)
 
         def make_send(i, sid):
             def _send(j, o):
-                logger.debug('[%s] SEND %8s [%2d -> %2d]' % (sid, o, i, j))
+                logger.debug('[%s] SEND %8s [%2d -> %2d]', (sid, o, i, j))
                 if i == j:
                     # If attempting to send the message to yourself
                     # then skip the network stack.
@@ -236,8 +247,11 @@ class ProcessProgramRunner(ProgramRunner):
         def make_recv(j, sid):
             async def _recv():
                 (i, o) = await self.listener.get_message(sid)
-                logger.debug('[%s] RECV %8s [%2d -> %2d]' % (sid, o, i, j))
+                if self.latency > 0:
+                    await asyncio.sleep(self.latency)
+                logger.debug('[%s] RECV %8s [%2d -> %2d]', (sid, o, i, j))
                 return (i, o)
+
             return _recv
 
         return make_send(self.nodeid, sid), make_recv(self.nodeid, sid)
@@ -245,17 +259,17 @@ class ProcessProgramRunner(ProgramRunner):
     def add(self, sid, program, **kwargs):
         send, recv = self.get_send_and_recv(sid)
         context = Mpc(
-                'sid',
-                self.N,
-                self.t,
-                self.nodeid,
-                sid,
-                send,
-                recv,
-                program,
-                self.config,
-                **kwargs,
-            )
+            'sid',
+            self.N,
+            self.t,
+            self.nodeid,
+            sid,
+            send,
+            recv,
+            program,
+            self.config,
+            **kwargs,
+        )
         self.programs.append(asyncio.ensure_future(context._run()))
         return send, recv
 
