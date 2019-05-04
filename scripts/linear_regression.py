@@ -69,10 +69,12 @@ async def _linear_regression_mpc_program(ctx, X, y):
                                         learning_rate=0.25)
     await theta.resolve()
     # theta = await theta.open()
-    m = theta[:3].reshape(3) / x_std * y_std
+    ndim = X.shape[1]
+
+    m = theta[:ndim].reshape(ndim) / x_std * y_std
     await m.resolve()
 
-    c = (theta[3] * y_std - (x_mean.reshape(3) * m).sum()) + y_mean
+    c = (theta[ndim] * y_std - (x_mean.reshape(ndim) * m).sum()) + y_mean
     print("m = ", await m.open())
     print("c = ", await c.open())
     # print(np.std(X, axis=0))
@@ -120,8 +122,9 @@ if __name__ == "__main__":
                 program_runner = ProcessProgramRunner(peers, n, t, my_id,
                                                       config)
                 await program_runner.start()
-                X = uniform_random(0, 10, (15, 3), seed=0)
-                y = 9 * X[:, 0] + 4 * X[:, 1] + 7 * X[:, 2] + 2
+                X = uniform_random(0, 10, (32, 30), seed=0)
+                c = uniform_random(0, 10, (30,), seed=1)
+                y = np.sum(c * X, axis=1).flatten()
                 # X = (X - np.mean(X, axis=0)) / np.std(X, axis=0)
                 program_runner.add(0, _linear_regression_mpc_program, X=X, y=y)
 
